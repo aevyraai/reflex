@@ -441,7 +441,8 @@ class TestBaselineOverride(unittest.TestCase):
                 baseline_override=override,
             )
 
-        self.assertEqual(call_count["n"], 0)
+        # baseline skipped — only the final verification eval runs
+        self.assertEqual(call_count["n"], 1)
 
     def test_without_baseline_override_eval_is_called(self):
         optimizer, call_count, _, strategy_mock = self._run_with_patches(None)
@@ -450,7 +451,8 @@ class TestBaselineOverride(unittest.TestCase):
              patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
             optimizer.run("You are helpful.", run_store=self.store)
 
-        self.assertGreaterEqual(call_count["n"], 1)
+        # baseline + final verification = at least 2 calls
+        self.assertGreaterEqual(call_count["n"], 2)
 
     def test_baseline_override_saved_to_run(self):
         override = EvalSnapshot(mean_score=0.61, scores_by_metric={"rouge": 0.61})
