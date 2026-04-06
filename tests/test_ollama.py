@@ -168,8 +168,6 @@ class TestOllamaEndToEnd:
     @requires_model
     def test_mini_run_completes(self, tmp_path, monkeypatch):
         """Full baseline → optimize → verify loop with a 3-sample dataset."""
-        from unittest.mock import MagicMock, patch
-
         from aevyra_reflex.optimizer import PromptOptimizer, OptimizerConfig
         from aevyra_reflex.run_store import RunStore
 
@@ -231,8 +229,6 @@ class TestOllamaEndToEnd:
     @requires_model
     def test_mini_run_persists_to_store(self, tmp_path):
         """Run is saved to the run store with baseline and at least 1 iteration."""
-        from unittest.mock import patch
-
         from aevyra_reflex.optimizer import PromptOptimizer, OptimizerConfig
         from aevyra_reflex.run_store import RunStore
 
