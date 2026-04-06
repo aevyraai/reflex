@@ -8,7 +8,7 @@ from aevyra_reflex.strategies import (
     list_strategies,
     register_strategy,
 )
-from aevyra_reflex.strategies.structural import STRUCTURAL_TRANSFORMS, StructuralStrategy
+from aevyra_reflex.strategies.structural import STRUCTURAL_TRANSFORMS
 from aevyra_reflex.strategies.pdo import _copeland_ranking, _thompson_sample_pair, _win_rate
 from aevyra_reflex.result import OptimizationResult
 
