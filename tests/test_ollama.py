@@ -270,3 +270,74 @@ class TestOllamaEndToEnd:
         assert run.load_baseline() is not None
         iters = run.load_iterations()
         assert len(iters) >= 1
+
+    @requires_ollama
+    @requires_model
+    def test_score_does_not_regress(self, tmp_path):
+        """best_score should be >= baseline after optimization.
+
+        Uses 3 iterations so the optimizer has a real chance to improve.
+        If the model produces identical scores throughout, the test is skipped
+        rather than failed — a flat score line isn't a regression.
+        """
+        from aevyra_reflex.optimizer import PromptOptimizer, OptimizerConfig
+
+        try:
+            from aevyra_verdict import Dataset, ExactMatch
+            from aevyra_verdict.dataset import Conversation, Message
+        except ImportError:
+            pytest.skip("aevyra_verdict not installed")
+
+        conversations = [
+            Conversation(
+                messages=[Message(role="user", content="The product exceeded my expectations!")],
+                ideal="positive",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="Terrible quality, broke after a day.")],
+                ideal="negative",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="It works as described, nothing more.")],
+                ideal="neutral",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="Absolutely love it, highly recommend.")],
+                ideal="positive",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="Would not buy again.")],
+                ideal="negative",
+            ),
+        ]
+        dataset = Dataset(conversations=conversations)
+
+        config = OptimizerConfig(
+            strategy="iterative",
+            max_iterations=3,
+            score_threshold=0.99,   # run all 3 iters
+            reasoning_model="llama3.2:1b",
+            reasoning_provider="ollama",
+            reasoning_base_url=OLLAMA_BASE_URL,
+        )
+
+        result = (
+            PromptOptimizer(config=config)
+            .set_dataset(dataset)
+            .add_provider("local", MODEL, base_url=OLLAMA_BASE_URL)
+            .add_metric(ExactMatch())
+            .run("Classify sentiment.")
+        )
+
+        baseline = result.baseline.mean_score
+        best = result.best_score
+
+        if baseline == best and all(it.score == baseline for it in result.iterations):
+            pytest.skip(
+                f"Score flat across all iterations ({baseline:.3f}) — "
+                "model may be deterministic on this dataset; skipping regression check."
+            )
+
+        assert best >= baseline, (
+            f"Score regressed: baseline={baseline:.3f}, best={best:.3f}"
+        )
