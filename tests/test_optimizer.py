@@ -434,7 +434,7 @@ class TestBaselineOverride(unittest.TestCase):
         optimizer, call_count, _, strategy_mock = self._run_with_patches(override)
 
         with patch("aevyra_reflex.optimizer.LLM"), \
-             patch("aevyra_reflex.optimizer.get_strategy", return_value=lambda: strategy_mock):
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
             optimizer.run(
                 "You are helpful.",
                 run_store=self.store,
@@ -447,7 +447,7 @@ class TestBaselineOverride(unittest.TestCase):
         optimizer, call_count, _, strategy_mock = self._run_with_patches(None)
 
         with patch("aevyra_reflex.optimizer.LLM"), \
-             patch("aevyra_reflex.optimizer.get_strategy", return_value=lambda: strategy_mock):
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
             optimizer.run("You are helpful.", run_store=self.store)
 
         self.assertGreaterEqual(call_count["n"], 1)
@@ -457,7 +457,7 @@ class TestBaselineOverride(unittest.TestCase):
         optimizer, _, _, strategy_mock = self._run_with_patches(override)
 
         with patch("aevyra_reflex.optimizer.LLM"), \
-             patch("aevyra_reflex.optimizer.get_strategy", return_value=lambda: strategy_mock):
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
             optimizer.run(
                 "You are helpful.",
                 run_store=self.store,
@@ -496,7 +496,7 @@ class TestBranchedFromPassthrough(unittest.TestCase):
         optimizer, strategy_mock = self._make_patched_optimizer()
 
         with patch("aevyra_reflex.optimizer.LLM"), \
-             patch("aevyra_reflex.optimizer.get_strategy", return_value=lambda: strategy_mock):
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
             optimizer.run(
                 "You are helpful.",
                 run_store=self.store,
@@ -514,7 +514,7 @@ class TestBranchedFromPassthrough(unittest.TestCase):
         optimizer, strategy_mock = self._make_patched_optimizer()
 
         with patch("aevyra_reflex.optimizer.LLM"), \
-             patch("aevyra_reflex.optimizer.get_strategy", return_value=lambda: strategy_mock):
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
             optimizer.run("You are helpful.", run_store=self.store)
 
         run = self.store.get_latest_run()
