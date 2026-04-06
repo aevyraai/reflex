@@ -1,0 +1,426 @@
+---
+title: Configuration
+description: Tuning iterations, thresholds, parallelism, and strategy-specific parameters.
+---
+
+## Setting the target score
+
+The score threshold tells reflex when to stop — "make my model at least this
+good." Rather than picking an arbitrary number, you should set the target from
+a real benchmark.
+
+There are three ways to set the target, in priority order:
+
+<Tabs>
+  <Tab title="From verdict results (recommended)">
+    If you've already run `aevyra-verdict` to compare models, pass the results
+    file and reflex uses the best model's score:
+
+    ```bash
+    # Step 1: benchmark with verdict
+    aevyra-verdict run data.jsonl \
+      -m openai/gpt-4o-mini -m local/llama3.1 \
+      -o results.json
+
+    # Step 2: optimize — target is automatically gpt-4o-mini's score
+    aevyra-reflex optimize data.jsonl prompt.md \
+      -m local/llama3.1 \
+      --verdict-results results.json \
+      -o best_prompt.md
+    ```
+
+    Python API:
+    ```python
+    optimizer.set_target_from_verdict("results.json")
+    ```
+  </Tab>
+  <Tab title="Live benchmark">
+    Pass `--target` models and reflex benchmarks them first, then optimizes
+    your model to match the best:
+
+    ```bash
+    aevyra-reflex optimize data.jsonl prompt.md \
+      -m local/llama3.1 \
+      --target openai/gpt-4o-mini \
+      --target openai/gpt-4o \
+      -o best_prompt.md
+    ```
+
+    Reflex runs all models (yours + targets) against the dataset, picks the
+    highest-scoring one, and uses its score as the threshold.
+
+    Python API:
+    ```python
+    benchmark = optimizer.benchmark_and_set_target(
+        prompt, all_providers,
+    )
+    ```
+  </Tab>
+  <Tab title="Explicit threshold">
+    Set the number directly. This overrides `--verdict-results` and `--target`:
+
+    ```bash
+    aevyra-reflex optimize data.jsonl prompt.md \
+      -m local/llama3.1 \
+      --threshold 0.90
+    ```
+
+    If no target source is set, defaults to 0.85.
+  </Tab>
+</Tabs>
+
+## OptimizerConfig
+
+All configuration goes through `OptimizerConfig`:
+
+```python
+from aevyra_reflex import OptimizerConfig
+
+config = OptimizerConfig(
+    strategy="auto",             # auto, iterative, structural, pdo, fewshot
+    max_iterations=10,           # total iteration budget
+    score_threshold=0.85,        # stop when score reaches this
+    max_workers=4,               # parallel workers for variant evaluation
+    reasoning_model="claude-sonnet-4-20250514",
+    eval_temperature=0.0,        # temperature for target model completions
+    extra_kwargs={},             # strategy-specific parameters
+)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `strategy` | `"auto"` | Which optimization strategy to use (or any custom registered name) |
+| `max_iterations` | `10` | Maximum iterations (total budget for auto across all phases) |
+| `score_threshold` | `0.85` | Target score — optimization stops when reached. Set automatically by `--target` or `--verdict-results` |
+| `max_workers` | `4` | Thread pool size for parallel evaluation |
+| `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
+| `reasoning_provider` | `None` | Provider for the reasoning model: `"anthropic"`, `"openai"`, `"ollama"`, or an alias. Auto-detected from model name if `None` |
+| `reasoning_api_key` | `None` | API key for the reasoning model. Falls back to the provider's default env var |
+| `reasoning_base_url` | `None` | Base URL for self-hosted or OpenAI-compatible reasoning model endpoints |
+| `eval_temperature` | `0.0` | Temperature for target model completions |
+| `target_model` | `None` | Label of the model whose score is the target (set automatically) |
+| `target_source` | `None` | How the target was set: `"verdict_json"`, `"verdict_run"`, or `"manual"` |
+| `extra_kwargs` | `{}` | Strategy-specific parameters (see below) |
+
+## Strategy-specific parameters
+
+Pass strategy-specific parameters via `extra_kwargs`:
+
+<Tabs>
+  <Tab title="Auto">
+    ```python
+    config = OptimizerConfig(
+        strategy="auto",
+        max_iterations=20,
+        extra_kwargs={
+            "max_phases": 4,
+            "start_structural": True,
+            "min_phases": 2,
+        },
+    )
+    ```
+
+    | Parameter | Default | Description |
+    |-----------|---------|-------------|
+    | `max_phases` | `4` | Maximum number of optimization phases |
+    | `start_structural` | `True` | Always begin with structural optimization |
+    | `min_phases` | `2` | Minimum phases before convergence (prevents noisy early stops) |
+  </Tab>
+  <Tab title="PDO">
+    ```python
+    config = OptimizerConfig(
+        strategy="pdo",
+        max_iterations=50,
+        extra_kwargs={
+            "duels_per_round": 3,
+            "samples_per_duel": 10,
+            "initial_pool_size": 6,
+            "thompson_alpha": 1.2,
+            "mutation_frequency": 5,
+            "num_top_to_mutate": 2,
+            "max_pool_size": 20,
+        },
+    )
+    ```
+
+    | Parameter | Default | Description |
+    |-----------|---------|-------------|
+    | `duels_per_round` | `3` | Duels per round |
+    | `samples_per_duel` | `10` | Dataset samples per duel |
+    | `initial_pool_size` | `6` | Starting pool of candidate prompts |
+    | `thompson_alpha` | `1.2` | Thompson sampling exploration parameter |
+    | `mutation_frequency` | `5` | Mutate top prompts every N rounds |
+    | `num_top_to_mutate` | `2` | How many top prompts to mutate |
+    | `max_pool_size` | `20` | Maximum pool size before pruning |
+  </Tab>
+  <Tab title="Few-shot">
+    ```python
+    config = OptimizerConfig(
+        strategy="fewshot",
+        max_iterations=8,
+        extra_kwargs={
+            "max_examples": 5,
+            "candidate_pool_size": 20,
+            "bootstrap_rounds": 3,
+            "selection_strategy": "diverse",
+        },
+    )
+    ```
+
+    | Parameter | Default | Description |
+    |-----------|---------|-------------|
+    | `max_examples` | `5` | Examples to include in the prompt |
+    | `candidate_pool_size` | `20` | Exemplars to bootstrap |
+    | `bootstrap_rounds` | `3` | Re-bootstrap every N iterations |
+    | `selection_strategy` | `"diverse"` | Example selection method |
+  </Tab>
+  <Tab title="Structural">
+    ```python
+    config = OptimizerConfig(
+        strategy="structural",
+        max_iterations=6,
+        extra_kwargs={
+            "variants_per_round": 4,
+        },
+    )
+    ```
+
+    | Parameter | Default | Description |
+    |-----------|---------|-------------|
+    | `variants_per_round` | `4` | Structural variants to try per iteration |
+  </Tab>
+</Tabs>
+
+## Parallel execution
+
+Strategies like structural and PDO evaluate multiple prompt variants per
+iteration. These variants are evaluated in parallel using threads.
+
+For **cloud APIs** (OpenAI, OpenRouter, Together), parallelism works out of the
+box:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --max-workers 4
+```
+
+For **Ollama**, you need to explicitly enable parallel inference — by default
+Ollama processes one request at a time:
+
+```bash
+# Option 1: Start Ollama from the terminal with parallel inference
+OLLAMA_NUM_PARALLEL=4 ollama serve
+
+# Option 2: If using the macOS app, set the env var system-wide
+launchctl setenv OLLAMA_NUM_PARALLEL 4
+# Then restart the Ollama app
+```
+
+Then tell reflex to use matching parallelism:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.2:8b \
+  --max-workers 4
+```
+
+<Note>
+  If reflex detects Ollama without `OLLAMA_NUM_PARALLEL` set, it automatically
+  falls back to 1 worker and logs a warning with setup instructions.
+</Note>
+
+Higher `OLLAMA_NUM_PARALLEL` uses more VRAM. Guidelines:
+
+| Model size | VRAM | Suggested parallel |
+|-----------|------|--------------------|
+| 1B | 4GB+ | 8 |
+| 8B | 8GB+ | 4 |
+| 70B | 48GB+ | 2 |
+
+## Choosing a reasoning model
+
+Reflex is an agent — it observes eval results, diagnoses failures, and
+iteratively rewrites your prompt. To do this reasoning, it calls an LLM.
+By default that's Claude Sonnet, but you can swap in any model: a local
+Ollama model, an OpenAI-compatible endpoint, or another cloud provider.
+
+The reasoning model is separate from the model being optimized (`-m`).
+A more capable reasoning model produces better prompt rewrites.
+
+<Tabs>
+  <Tab title="Ollama (local)">
+    ```bash
+    aevyra-reflex optimize dataset.jsonl prompt.md \
+      -m local/llama3.2:1b \
+      --reasoning-model ollama/llama3.1:70b
+    ```
+
+    Python API:
+    ```python
+    config = OptimizerConfig(
+        reasoning_model="llama3.1:70b",
+        reasoning_provider="ollama",
+    )
+    ```
+  </Tab>
+  <Tab title="OpenAI">
+    ```bash
+    aevyra-reflex optimize dataset.jsonl prompt.md \
+      -m local/llama3.1 \
+      --reasoning-model openai/gpt-4o
+    ```
+
+    Python API:
+    ```python
+    config = OptimizerConfig(
+        reasoning_model="gpt-4o",
+        reasoning_provider="openai",
+    )
+    ```
+  </Tab>
+  <Tab title="OpenRouter / Together / etc.">
+    ```bash
+    aevyra-reflex optimize dataset.jsonl prompt.md \
+      -m local/llama3.1 \
+      --reasoning-model openrouter/meta-llama/llama-3.1-70b-instruct
+    ```
+
+    Provider aliases (`openrouter`, `together`, `groq`, etc.) work the same
+    way as for `--target` and `-m`. The API key is read from the provider's
+    env var (e.g. `OPENROUTER_API_KEY`), or you can pass `--reasoning-api-key`.
+  </Tab>
+  <Tab title="Self-hosted endpoint">
+    ```bash
+    aevyra-reflex optimize dataset.jsonl prompt.md \
+      -m local/llama3.1 \
+      --reasoning-model openai/my-model \
+      --reasoning-base-url http://localhost:8000/v1 \
+      --reasoning-api-key dummy
+    ```
+
+    Any OpenAI-compatible server (vLLM, TGI, llama.cpp, etc.) works with
+    provider `openai` and a custom `--reasoning-base-url`.
+  </Tab>
+</Tabs>
+
+<Note>
+  The reasoning model needs strong analytical abilities. Local models work
+  well for simpler strategies (iterative), but the auto strategy benefits
+  from a more capable model since it makes multi-step decisions about which
+  optimization axes to apply.
+</Note>
+
+## Run persistence and checkpointing
+
+Reflex automatically saves every run to a `.reflex/` directory. Each
+iteration is checkpointed so that if a run crashes or is interrupted, you
+can resume exactly where it left off.
+
+### Directory structure
+
+```
+.reflex/
+  runs/
+    001_2026-04-04T10-32-15/
+      config.json           # full config snapshot
+      baseline.json         # baseline eval scores
+      checkpoint.json       # resume state (updated each iteration)
+      best_prompt.md        # current best prompt (always up to date)
+      iterations/
+        001.json            # per-iteration state
+        002.json
+        003.json
+      result.json           # only written when run completes
+    002_2026-04-05T14-10-00/
+      ...
+```
+
+Each run gets a sequential ID (`001`, `002`, ...) and a timestamped
+directory. The config, dataset path, and initial prompt are captured at
+the start so every run is fully reproducible.
+
+### Resuming interrupted runs
+
+If a run is interrupted (Ctrl-C, crash, network timeout), use `--resume`
+to pick up where it left off:
+
+```bash
+# Resume the latest interrupted run matching this dataset
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --resume
+
+# Resume a specific run by ID
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --resume-from 003
+```
+
+The checkpoint contains the full state: current best prompt, score
+trajectory, completed iterations, baseline scores, and strategy-specific
+state. On resume, reflex skips the baseline eval and jumps straight to
+the next iteration.
+
+### Listing runs
+
+```bash
+aevyra-reflex runs
+```
+
+Shows all runs with their status, strategy, scores, and iteration count.
+Add `-v` for config details (reasoning model, target models).
+
+### Custom run directory
+
+By default, runs are stored in `.reflex/` in the current working
+directory. Use `--run-dir` to change this:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --run-dir ./experiments/.reflex
+```
+
+### Python API
+
+```python
+from aevyra_reflex import PromptOptimizer, OptimizerConfig, RunStore
+
+store = RunStore(root=".reflex")
+
+# New run with checkpointing
+result = optimizer.run(
+    initial_prompt,
+    run_store=store,
+)
+
+# Resume an interrupted run
+incomplete = store.find_incomplete_run(dataset_path="data.jsonl")
+if incomplete:
+    result = optimizer.run(
+        initial_prompt,
+        run_store=store,
+        resume_run=incomplete,
+    )
+
+# List all runs
+for run_summary in store.list_runs():
+    print(f"{run_summary.run_id}: {run_summary.status} — best: {run_summary.best_score}")
+```
+
+## Metrics
+
+By default, reflex uses ROUGE. You can switch to a different metric or use an
+LLM judge:
+
+```bash
+# Explicit metric
+aevyra-reflex optimize ... --metric bleu
+
+# LLM judge (no automated metric)
+aevyra-reflex optimize ... --judge openrouter/openai/gpt-4o-mini
+```
+
+`--metric` and `--judge` are mutually exclusive. If neither is specified,
+ROUGE is used as the default.

@@ -1,0 +1,39 @@
+name: Sync docs to docs repo
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout reflex
+        uses: actions/checkout@v4
+
+      - name: Checkout docs repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          git clone https://x-access-token:${GH_TOKEN}@github.com/aevyraai/docs.git /tmp/docs
+          cd /tmp/docs
+          git config user.name "Aevyra Bot"
+          git config user.email "bot@aevyra.ai"
+
+      - name: Copy docs into docs repo
+        run: |
+          rm -rf /tmp/docs/reflex
+          cp -r docs/ /tmp/docs/reflex
+
+      - name: Commit and push if changed
+        run: |
+          cd /tmp/docs
+          git add reflex/
+          git diff --cached --quiet && echo "No changes, skipping" && exit 0
+          git commit -m "chore: sync reflex docs from reflex@${{ github.sha }}"
+          git push origin main

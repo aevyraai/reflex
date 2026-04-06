@@ -1,0 +1,198 @@
+---
+title: Integrations
+description: Log reflex runs to MLflow, Weights & Biases, or any custom experiment tracker.
+---
+
+Reflex ships with a callback system that lets you stream run data to experiment
+tracking platforms. Callbacks are optional — they never affect core optimization
+behavior, and a broken callback will never crash a run.
+
+## Usage
+
+Pass a `callbacks` list to `.run()`:
+
+```python
+from aevyra_reflex import PromptOptimizer, MLflowCallback
+
+result = (
+    PromptOptimizer()
+    .set_dataset(dataset)
+    .add_provider("openai", "gpt-4o-mini")
+    .add_metric(RougeScore())
+    .run("You are a helpful assistant.", callbacks=[MLflowCallback()])
+)
+```
+
+Multiple callbacks can be composed freely:
+
+```python
+result = optimizer.run(prompt, callbacks=[MLflowCallback(), MyCustomCallback()])
+```
+
+---
+
+## MLflow
+
+`MLflowCallback` logs the full run to an MLflow experiment using MLflow's
+standard tracking API. No server required — by default it writes to a local
+`./mlruns` directory that you can open with `mlflow ui`.
+
+**Install:**
+
+```bash
+pip install mlflow
+```
+
+**Minimal usage:**
+
+```python
+from aevyra_reflex import MLflowCallback
+
+result = optimizer.run(prompt, callbacks=[MLflowCallback()])
+```
+
+**With options:**
+
+```python
+cb = MLflowCallback(
+    run_name="summarization-v2",
+    tracking_uri="http://localhost:5000",  # remote MLflow server
+    experiment_name="prompt-experiments",
+    tags={"team": "nlp", "dataset": "cnn-dm"},
+    log_prompt_each_iter=True,             # save prompt artifact every iteration
+)
+result = optimizer.run(prompt, callbacks=[cb])
+```
+
+### What gets logged
+
+| When | What |
+|------|------|
+| Run start | Params: `strategy`, `reasoning_model`, `max_iterations`, `score_threshold`, `temperature`, `max_workers`, `target_model`, `target_source` |
+| Each iteration | Metrics: `score`, `score_<metric>` (e.g. `score_rouge`) at `step = iteration` |
+| Run end | Metrics: `best_score`, `baseline_score`, `improvement`, `improvement_pct`, `converged`, `total_iterations` |
+| Run end | Artifact: `prompts/best_prompt_*.txt` — the winning prompt |
+
+### Viewing results
+
+```bash
+mlflow ui
+# opens at http://localhost:5000
+```
+
+You can compare runs, plot score trajectories, and download best prompts from
+the MLflow UI. Each reflex run appears as a separate MLflow run inside the
+configured experiment.
+
+---
+
+## Writing a custom callback
+
+Implement any subset of the three lifecycle methods:
+
+```python
+class MyCallback:
+    def on_run_start(self, config, initial_prompt: str) -> None:
+        """Called once before the baseline eval."""
+        print(f"Starting {config.strategy} run")
+
+    def on_iteration(self, record) -> None:
+        """Called after each iteration completes.
+
+        record fields:
+            iteration (int)         — 1-based iteration number
+            score (float)           — mean score this iteration
+            scores_by_metric (dict) — per-metric breakdown
+            system_prompt (str)     — prompt used this iteration
+            reasoning (str)         — reasoning model's explanation
+        """
+        print(f"  #{record.iteration}  {record.score:.4f}")
+
+    def on_run_end(self, result) -> None:
+        """Called once after the final verification eval.
+
+        result fields:
+            best_prompt (str)         — the best system prompt found
+            best_score (float)        — score of the best prompt
+            baseline.mean_score       — score before optimization
+            improvement (float)       — best_score - baseline
+            improvement_pct (float)   — improvement as a percentage
+            score_trajectory (list)   — score after each iteration
+            phase_history (list)      — auto strategy phase breakdown
+        """
+        print(f"Done. {result.baseline.mean_score:.4f} → {result.best_score:.4f}")
+
+result = optimizer.run(prompt, callbacks=[MyCallback()])
+```
+
+You only need to implement the methods you care about. Callbacks that are
+missing a method are skipped silently — there is no base class to inherit from.
+
+---
+
+## Weights & Biases
+
+`WandbCallback` logs the full run to a W&B project using the standard
+`wandb` Python SDK.
+
+**Install:**
+
+```bash
+pip install wandb
+wandb login  # one-time setup
+```
+
+**Minimal usage:**
+
+```python
+from aevyra_reflex import WandbCallback
+
+result = optimizer.run(prompt, callbacks=[WandbCallback()])
+```
+
+**With options:**
+
+```python
+cb = WandbCallback(
+    project="prompt-experiments",
+    run_name="summarization-v2",
+    entity="my-team",
+    tags=["auto", "cnn-dm"],
+    log_prompt_each_iter=True,  # log prompt text as a W&B Table each iteration
+)
+result = optimizer.run(prompt, callbacks=[cb])
+```
+
+**Testing without a W&B account:**
+
+Use `mode="offline"` to write runs locally without any network access.
+Run `wandb sync ./wandb/offline-run-*` later to push them.
+
+```python
+cb = WandbCallback(mode="offline")
+```
+
+### What gets logged
+
+| When | What |
+|------|------|
+| Run start | Config: `strategy`, `reasoning_model`, `max_iterations`, `score_threshold`, `temperature`, `max_workers`, `target_model`, `target_source` |
+| Each iteration | Metrics: `score`, `score_<metric>` (e.g. `score_rouge`) at `step = iteration` |
+| Run end | Summary: `best_score`, `baseline_score`, `improvement`, `improvement_pct`, `converged`, `total_iterations` |
+| Run end | Artifact: `best-prompt` (type: `prompt`) containing `best_prompt.txt` |
+
+The score chart in W&B will automatically show the optimization trajectory
+across iterations. The summary fields appear in the run overview table, making
+it easy to compare runs side by side.
+
+---
+
+## Using both together
+
+MLflow and W&B can run simultaneously — pass both in the callbacks list:
+
+```python
+result = optimizer.run(prompt, callbacks=[
+    MLflowCallback(experiment_name="reflex"),
+    WandbCallback(project="reflex"),
+])

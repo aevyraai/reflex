@@ -1,0 +1,171 @@
+---
+title: Quick start
+description: Optimize your first prompt in under 5 minutes.
+---
+
+## Install
+
+```bash
+pip install aevyra-reflex
+```
+
+This also installs [aevyra-verdict](https://github.com/aevyraai/verdict) for
+evaluation.
+
+## Set your API keys
+
+By default, reflex uses Claude for reasoning (analyzing failures, rewriting
+prompts). You also need a key for whatever model you're optimizing:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...    # default reasoning model (or use --reasoning-model for local)
+export OPENAI_API_KEY=sk-...           # if optimizing an OpenAI model
+```
+
+For local models (Ollama), no extra key is needed. You can also use a local
+reasoning model — see [Choosing a reasoning model](/docs/configuration#choosing-a-reasoning-model).
+
+## Prepare a dataset
+
+Use the same JSONL format as verdict — each line has messages and an ideal answer:
+
+```json
+{"messages": [{"role": "user", "content": "What is the capital of France?"}], "ideal": "Paris"}
+{"messages": [{"role": "user", "content": "Explain binary search in one sentence."}], "ideal": "Binary search repeatedly halves a sorted array to find a target value in O(log n) time."}
+```
+
+## Write a starting prompt
+
+Create a plain text file with your system prompt:
+
+```markdown
+You are a helpful assistant. Answer questions concisely.
+```
+
+This is the prompt reflex will improve.
+
+## Run your first optimization
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  -o best_prompt.md
+```
+
+You'll see a baseline eval, optimization iterations with rising scores, and a
+final verification:
+
+```
+====================================================
+  aevyra-reflex
+====================================================
+  Dataset    : dataset.jsonl (50 samples)
+  Model(s)   : local/llama3.1
+  Strategy   : auto
+  Metrics    : rouge
+  Reasoning  : claude-sonnet-4-20250514
+  Target     : 0.85
+====================================================
+
+Step 1/3  Running baseline eval...
+
+Step 2/3  Optimizing...
+  iteration  1  score: 0.6234
+  iteration  2  score: 0.7105
+  iteration  3  score: 0.8612
+
+Step 3/3  Verifying...
+
+====================================================
+  OPTIMIZATION RESULTS
+====================================================
+  Baseline score   : 0.5821
+  Final score      : 0.8612
+  Improvement      : +0.2791 (+47.9%)
+  Iterations       : 3
+  Converged        : True
+====================================================
+
+Best prompt saved to: best_prompt.md
+```
+
+## Use the Python API
+
+```python
+from aevyra_verdict import Dataset, RougeScore
+from aevyra_reflex import PromptOptimizer, OptimizerConfig
+
+dataset = Dataset.from_jsonl("dataset.jsonl")
+
+config = OptimizerConfig(
+    strategy="auto",
+    max_iterations=10,
+    score_threshold=0.85,
+)
+
+result = (
+    PromptOptimizer(config)
+    .set_dataset(dataset)
+    .add_provider("local", "llama3.1")
+    .add_metric(RougeScore())
+    .run("You are a helpful assistant.")
+)
+
+print(result.summary())
+result.save_best_prompt("best_prompt.md")
+```
+
+## Set a real target (verdict → reflex)
+
+Instead of an arbitrary threshold, set the target from a real benchmark. If you
+already ran `aevyra-verdict`, pass the results file:
+
+```bash
+# Use gpt-4o-mini's score as the target for llama
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --verdict-results results.json \
+  -o best_prompt.md
+```
+
+Or let reflex benchmark for you in one command:
+
+```bash
+# Benchmark llama vs gpt-4o-mini, then optimize llama to match
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --target openai/gpt-4o-mini \
+  -o best_prompt.md
+```
+
+## Use a cloud provider
+
+```bash
+# OpenRouter (pay-per-token, many models)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --target openai/gpt-4o-mini \
+  -o best_prompt.md
+
+# Together AI
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m together/meta-llama/Llama-3.1-8B-Instruct \
+  -o best_prompt.md
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Strategies" icon="chess" href="/docs/strategies">
+    Understand auto, iterative, structural, PDO, and fewshot
+  </Card>
+  <Card title="Configuration" icon="gear" href="/docs/configuration">
+    Tune iterations, thresholds, parallelism, and strategy params
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/docs/cli">
+    All flags and options
+  </Card>
+  <Card title="Analysis output" icon="chart-line" href="/docs/analysis">
+    Understand the optimization report
+  </Card>
+</CardGroup>

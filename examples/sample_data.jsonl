@@ -1,0 +1,10 @@
+{"messages": [{"role": "user", "content": "What is the capital of France?"}], "ideal": "The capital of France is Paris."}
+{"messages": [{"role": "user", "content": "Explain photosynthesis in one sentence."}], "ideal": "Photosynthesis is the process by which green plants use sunlight, water, and carbon dioxide to produce glucose and oxygen."}
+{"messages": [{"role": "user", "content": "What is 15% of 200?"}], "ideal": "15% of 200 is 30."}
+{"messages": [{"role": "user", "content": "Name the three states of matter."}], "ideal": "The three states of matter are solid, liquid, and gas."}
+{"messages": [{"role": "user", "content": "What does CPU stand for?"}], "ideal": "CPU stands for Central Processing Unit."}
+{"messages": [{"role": "user", "content": "Who wrote Romeo and Juliet?"}], "ideal": "Romeo and Juliet was written by William Shakespeare."}
+{"messages": [{"role": "user", "content": "What is the chemical formula for water?"}], "ideal": "The chemical formula for water is H2O."}
+{"messages": [{"role": "user", "content": "Convert 100 degrees Celsius to Fahrenheit."}], "ideal": "100 degrees Celsius is equal to 212 degrees Fahrenheit."}
+{"messages": [{"role": "user", "content": "What is the largest planet in our solar system?"}], "ideal": "The largest planet in our solar system is Jupiter."}
+{"messages": [{"role": "user", "content": "Define the term 'algorithm'."}], "ideal": "An algorithm is a step-by-step set of instructions or rules designed to solve a specific problem or perform a computation."}

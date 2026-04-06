@@ -1,0 +1,99 @@
+---
+title: Analysis output
+description: Understanding the optimization report — trajectory, strategy breakdown, prompt diff, and before/after examples.
+---
+
+After optimization, reflex produces a detailed analysis that explains what
+happened and teaches prompt engineering principles. This page walks through each
+section.
+
+## Score trajectory
+
+```
+Trajectory : 0.350 → 0.450 → 0.520 → 0.600 → 0.650 → 0.720 → 0.780 → 0.850 → 0.880
+```
+
+The trajectory shows every iteration's score. Reflex analyzes the shape:
+
+- **Steady climb** — consistent improvement across iterations
+- **Plateau** — scores flatten, suggesting diminishing returns from the current approach
+- **Over-optimization** — scores peak then regress (model may be overfitting to a pattern)
+- **Gap closed** — how much of the remaining gap (to 1.0) was closed
+
+If the result didn't converge, reflex suggests next steps: trying a different
+strategy, adding more data, or adjusting the threshold.
+
+## Strategy breakdown
+
+When using auto mode, reflex shows what each phase contributed:
+
+```
+Strategy breakdown:
+  Phase 1 — structural    : 0.350 → 0.520 (+0.170)
+  Phase 2 — iterative     : 0.520 → 0.780 (+0.260)
+  Phase 3 — fewshot       : 0.780 → 0.880 (+0.100)
+```
+
+Each phase also includes an educational lesson explaining *why* that technique
+helped (or didn't):
+
+- **Structural helped** — "Structure matters: reorganizing how instructions are
+  presented can dramatically improve model comprehension."
+- **Iterative helped** — "Specificity matters: models follow precise, explicit
+  instructions better than vague ones."
+- **Fewshot helped** — "Examples matter: showing the model what good output
+  looks like is one of the most reliable ways to improve quality."
+- **Phase hurt performance** — the analysis explains what went wrong and what
+  to avoid
+
+## Prompt diff
+
+```
+What changed in the prompt:
+  - Much longer (5 → 47 words). The model needed more detailed instructions.
+  - Added: markdown headers for clear sections, bold emphasis on key
+    instructions, XML tags for structural clarity, explicit constraints
+    on what to avoid
+```
+
+Reflex compares the original and optimized prompts, highlighting:
+
+- Length changes and what they mean
+- New structural features (headers, bullets, XML tags, examples)
+- Added constraints or format specifications
+
+## Before / after example
+
+```
+BEFORE / AFTER EXAMPLE (most-improved sample):
+  Input:  Summarize photosynthesis.
+  BEFORE (score: 0.25):
+    Plants use light.
+  AFTER (score: 0.75):
+    Plants convert sunlight into chemical energy using chlorophyll...
+  Score change: 0.25 → 0.75 (+0.50)
+```
+
+Reflex picks the sample with the largest score improvement and shows the
+concrete difference the optimized prompt made.
+
+## Programmatic access
+
+All analysis data is available programmatically:
+
+```python
+result = optimizer.run("You are a helpful assistant.")
+
+# Full formatted summary (includes all sections above)
+print(result.summary())
+
+# Raw data
+result.score_trajectory       # [0.35, 0.45, ...]
+result.improvement            # 0.58
+result.improvement_pct        # 193.3
+result.phase_history          # [{"phase": 1, "axis": "structural", ...}]
+
+# Serialize
+result.to_json("results.json")
+result.save_best_prompt("best_prompt.md")
+```

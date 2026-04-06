@@ -1,0 +1,170 @@
+---
+title: Strategies
+description: How each optimization axis works and when to use it.
+---
+
+Reflex ships with five strategies. The **auto** strategy (default) chains
+multiple axes adaptively. Each axis can also be used standalone with
+`-s <name>`.
+
+## Auto (default)
+
+The auto strategy runs a multi-phase pipeline:
+
+1. Run a baseline eval to measure the starting score
+2. The reasoning model analyzes the prompt's weaknesses and recommends an optimization axis
+3. Apply that axis for a few iterations
+4. Re-evaluate — if the threshold is met, stop
+5. Otherwise the reasoning model picks the next axis based on what changed
+6. Repeat until the global iteration budget runs out
+
+A typical run: structural (fix formatting) → iterative (fix wording) → fewshot
+(add examples) — each phase builds on the previous one's improvements.
+
+Auto requires at least **two phases** before it considers converging, because
+LLM judge scores can be noisy and a single high score may not hold on
+re-evaluation.
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1
+```
+
+## Iterative
+
+Each iteration:
+
+1. Run completions with the current prompt via verdict
+2. Score all responses with the configured metrics
+3. Identify the worst-scoring samples
+4. The reasoning model analyzes the failures and proposes a revised prompt
+5. If the score meets the threshold, stop; otherwise repeat
+
+Best for: prompts that are structurally fine but have wording issues, missing
+constraints, or ambiguous instructions.
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s iterative
+```
+
+## Structural
+
+Optimizes the *organization and formatting* of the prompt:
+
+1. Run eval with the current prompt structure
+2. Generate variants using different transformations:
+   - Markdown headers for clear sections
+   - XML tags for structural clarity
+   - Minimal flat paragraphs
+   - Role/task/format split
+   - Constraint emphasis
+   - Task decomposition
+   - Input-anchored layout
+3. The reasoning model also generates a free-form structural improvement
+4. Evaluate all variants in parallel; keep the best
+5. Repeat with the winning structure
+
+Best for: prompts that are long, disorganized, or missing clear structure.
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s structural
+```
+
+<Note>
+  Structural evaluates multiple variants per iteration. Use `--max-workers` to
+  control parallelism. For Ollama, see the [parallelism guide](/docs/configuration#parallel-execution).
+</Note>
+
+## PDO (Prompt Duel Optimizer)
+
+Tournament-style search over prompt variants using dueling bandits with
+Thompson sampling:
+
+1. Generate an initial pool of diverse prompts
+2. Each round, Thompson sampling selects two prompts to duel
+3. Both are evaluated on a sample of the dataset
+4. An LLM judge picks the winner on each sample; majority wins the duel
+5. Win matrix is updated; Copeland rankings recalculated
+6. Periodically, top-ranked prompts are mutated to explore new variants
+7. Worst performers are pruned to keep the pool manageable
+
+Based on Meta's PDO paper ([arXiv:2510.13907](https://arxiv.org/abs/2510.13907)).
+
+Best for: when you have budget for many evaluations and want broad exploration
+of the prompt space.
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  -s pdo \
+  --max-iterations 50
+```
+
+## Few-shot
+
+Optimizes *which examples* to include in the prompt:
+
+1. Bootstrap: run the bare instruction and collect highest-scoring samples as
+   candidate exemplars
+2. The reasoning model selects a diverse, informative subset
+3. Build a composite prompt: instruction + curated few-shot examples
+4. Evaluate, identify remaining failures
+5. The reasoning model swaps examples to better cover the failure modes
+6. Periodically re-bootstrap to discover new exemplar candidates
+
+Best for: tasks where showing the model examples helps more than refining
+instructions (translation, classification, structured extraction).
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s fewshot
+```
+
+## Custom strategies
+
+You can implement your own strategy by subclassing `Strategy` and registering
+it. Your strategy then works in both the Python API and the CLI.
+
+```python
+from aevyra_reflex import Strategy, register_strategy
+from aevyra_reflex.result import OptimizationResult, IterationRecord
+
+class MonteCarloStrategy(Strategy):
+    def run(self, *, initial_prompt, dataset, providers, metrics,
+            agent, config, on_iteration=None):
+        best_prompt = initial_prompt
+        best_score = 0.0
+        iterations = []
+
+        for i in range(config.max_iterations):
+            # Generate a candidate, evaluate it, track the best...
+            record = IterationRecord(i + 1, candidate, score)
+            iterations.append(record)
+            if on_iteration:
+                on_iteration(record)
+            if score >= config.score_threshold:
+                break
+
+        return OptimizationResult(
+            best_prompt=best_prompt,
+            best_score=best_score,
+            iterations=iterations,
+            converged=best_score >= config.score_threshold,
+        )
+
+register_strategy("montecarlo", MonteCarloStrategy)
+```
+
+Then use it like any built-in:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s montecarlo
+```
+
+The `run()` method receives the full eval infrastructure — dataset, providers,
+metrics, the reasoning model (as `agent`), and the optimizer config — so your
+strategy has everything it needs to evaluate prompts and propose improvements.
+
+<Note>
+  Register your strategy before calling `PromptOptimizer.run()` or the CLI.
+  A common pattern is to put the registration in a module that's imported at
+  startup.
+</Note>

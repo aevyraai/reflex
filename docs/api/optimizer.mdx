@@ -1,0 +1,217 @@
+---
+title: PromptOptimizer
+description: API reference for PromptOptimizer, OptimizerConfig, and strategy registration.
+---
+
+## OptimizerConfig
+
+Configuration dataclass for the optimizer.
+
+```python
+from aevyra_reflex import OptimizerConfig
+
+config = OptimizerConfig(
+    strategy="auto",
+    max_iterations=10,
+    score_threshold=0.85,
+    max_workers=4,
+    reasoning_model="claude-sonnet-4-20250514",
+    reasoning_provider=None,       # "anthropic", "openai", "ollama", or alias
+    reasoning_api_key=None,        # defaults to provider's env var
+    reasoning_base_url=None,       # for self-hosted endpoints
+    eval_temperature=0.0,
+    extra_kwargs={},
+)
+```
+
+### Properties
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `strategy` | `str` | `"auto"` | Optimization strategy name (or any custom registered name) |
+| `max_iterations` | `int` | `10` | Maximum optimization iterations |
+| `score_threshold` | `float` | `0.85` | Target score for convergence |
+| `max_workers` | `int` | `4` | Thread pool size for parallel evaluation |
+| `reasoning_model` | `str` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
+| `reasoning_provider` | `str \| None` | `None` | Provider: `"anthropic"`, `"openai"`, `"ollama"`, or an alias. Auto-detected from model name if `None` |
+| `reasoning_api_key` | `str \| None` | `None` | API key for the reasoning model |
+| `reasoning_base_url` | `str \| None` | `None` | Base URL for self-hosted reasoning model endpoints |
+| `eval_temperature` | `float` | `0.0` | Temperature for target model |
+| `target_model` | `str \| None` | `None` | Label of the model whose score is the target (set by verdict integration) |
+| `target_source` | `str \| None` | `None` | How the target was set: `"verdict_json"`, `"verdict_run"`, or `"manual"` |
+| `extra_kwargs` | `dict` | `{}` | Strategy-specific parameters |
+
+## PromptOptimizer
+
+The main optimizer class. Uses a builder pattern for configuration.
+
+```python
+from aevyra_reflex import PromptOptimizer, OptimizerConfig
+
+result = (
+    PromptOptimizer(OptimizerConfig(strategy="auto"))
+    .set_dataset(dataset)
+    .add_provider("local", "llama3.1")
+    .add_metric(RougeScore())
+    .set_target_from_verdict("results.json")
+    .run("You are a helpful assistant.")
+)
+```
+
+### Methods
+
+#### `set_dataset(dataset)`
+
+Set the evaluation dataset.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `dataset` | `aevyra_verdict.Dataset` | The dataset to evaluate against |
+
+Returns `self` for chaining.
+
+#### `add_provider(provider, model, **kwargs)`
+
+Add a model provider. Supports provider aliases (openrouter, together, groq,
+etc.) which resolve automatically.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | `str` | Provider name or alias |
+| `model` | `str` | Model identifier |
+| `label` | `str` | Optional display label |
+| `api_key` | `str` | Optional API key override |
+| `base_url` | `str` | Optional base URL override |
+
+Returns `self` for chaining.
+
+#### `add_metric(metric)`
+
+Add a scoring metric.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `metric` | `aevyra_verdict.Metric` | A verdict metric instance |
+
+Returns `self` for chaining.
+
+#### `set_target_from_verdict(path, metric=None)`
+
+Set the score threshold from a verdict results JSON file. Parses the file,
+finds the best model's score, and uses it as the optimization target.
+
+```python
+optimizer.set_target_from_verdict("results.json")
+
+# Or rank by a specific metric
+optimizer.set_target_from_verdict("results.json", metric="bleu")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | `str \| Path` | Path to verdict's results JSON |
+| `metric` | `str \| None` | Which metric to rank by. Defaults to the first metric in the file |
+
+Returns `self` for chaining. Sets `config.score_threshold`, `config.target_model`,
+and `config.target_source`.
+
+#### `benchmark_and_set_target(prompt, providers, metric=None)`
+
+Run verdict with multiple models, then set the target from the best. This is
+the "benchmark first, then optimize" flow.
+
+```python
+from aevyra_reflex.optimizer import _resolve_provider
+
+target_providers = [
+    _resolve_provider("openai", "gpt-4o-mini"),
+    _resolve_provider("openai", "gpt-4o"),
+]
+
+benchmark = optimizer.benchmark_and_set_target(
+    "You are a helpful assistant.",
+    optimizer._providers + target_providers,
+)
+
+print(benchmark["best_model"])   # "openai/gpt-4o"
+print(benchmark["best_score"])   # 0.92
+print(benchmark["model_scores"]) # {"openai/gpt-4o": 0.92, ...}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `prompt` | `str` | System prompt to benchmark |
+| `providers` | `list[dict]` | All providers to benchmark (including the target models) |
+| `metric` | `str \| None` | Which metric to rank by. Defaults to first metric |
+
+Returns a dict with `model_scores`, `best_model`, `best_score`, and `results`.
+
+#### `run(system_prompt)`
+
+Run the optimization. Returns an `OptimizationResult`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `system_prompt` | `str` | The starting system prompt to optimize |
+
+## parse_verdict_results
+
+Standalone function to parse a verdict results JSON file.
+
+```python
+from aevyra_reflex import parse_verdict_results
+
+parsed = parse_verdict_results("results.json")
+print(parsed["best_model"])   # "openai/gpt-4o-mini"
+print(parsed["best_score"])   # 0.8765
+print(parsed["models"])       # dict of all models with their scores
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | `str \| Path` | Path to verdict results JSON |
+| `metric` | `str \| None` | Which metric to rank by |
+
+Returns a dict with `models`, `metrics`, `best_model`, `best_score`,
+`target_model`, and `target_score`.
+
+## Strategy registration
+
+Register custom strategies so they can be used by name in `OptimizerConfig`
+and the CLI `-s` flag.
+
+```python
+from aevyra_reflex import Strategy, register_strategy
+from aevyra_reflex.result import OptimizationResult
+
+class MonteCarloStrategy(Strategy):
+    def run(self, *, initial_prompt, dataset, providers, metrics,
+            agent, config, on_iteration=None):
+        # ... your optimization loop ...
+        return OptimizationResult(
+            best_prompt=best,
+            best_score=score,
+            iterations=iterations,
+            converged=True,
+        )
+
+register_strategy("montecarlo", MonteCarloStrategy)
+```
+
+#### `register_strategy(name, cls)`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Short name for the strategy (used in CLI `-s` flag) |
+| `cls` | `type[Strategy]` | A class inheriting from `Strategy` |
+
+Raises `TypeError` if `cls` doesn't inherit from `Strategy`.
+
+#### `list_strategies()`
+
+Returns a sorted list of all registered strategy names.
+
+```python
+from aevyra_reflex.strategies import list_strategies
+print(list_strategies())  # ['auto', 'fewshot', 'iterative', 'montecarlo', 'pdo', 'structural']
+```

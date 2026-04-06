@@ -1,0 +1,198 @@
+---
+title: CLI reference
+description: All commands and flags for the aevyra-reflex CLI.
+---
+
+## optimize
+
+The main command. Runs a baseline eval, optimizes the prompt, and verifies the
+result.
+
+```bash
+aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
+```
+
+### Arguments
+
+| Argument  | Description |
+|-----------|-------------|
+| `dataset` | Path to a JSONL file in verdict format |
+| `prompt`  | Path to a text file containing the system prompt |
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-m`, `--model` | *(required)* | Model to optimize, in `provider/model` format. Examples: `local/llama3.1`, `openai/gpt-5.4-nano`, `openrouter/meta-llama/llama-3.1-8b-instruct` |
+| `--target` | — | Target model(s) to benchmark against. The best score becomes the threshold. Repeatable. Mutually exclusive with `--verdict-results` |
+| `--verdict-results` | — | Path to a verdict results JSON file. Sets the threshold from the best model's score. Mutually exclusive with `--target` |
+| `-s`, `--strategy` | `auto` | Optimization strategy: `auto`, `iterative`, `structural`, `pdo`, `fewshot` (or any custom registered strategy) |
+| `--metric` | `rouge` | Scoring metric: `rouge`, `bleu`, `exact`. Mutually exclusive with `--judge` |
+| `--judge` | — | Use an LLM judge instead of automated metrics. Format: `provider/model`. Mutually exclusive with `--metric` |
+| `--max-iterations` | `10` | Maximum optimization iterations (total budget for auto) |
+| `--threshold` | — | Explicit score threshold (0.0–1.0). Overrides `--target` and `--verdict-results`. Defaults to 0.85 if no target is set |
+| `--max-workers` | `4` | Parallel workers for variant evaluation |
+| `--reasoning-model` | `claude-sonnet-4-20250514` | LLM for reasoning in `provider/model` format. Supports `ollama/`, `openai/`, `openrouter/`, etc. |
+| `--reasoning-api-key` | — | API key for the reasoning model. Also reads `REFLEX_REASONING_API_KEY` env var |
+| `--reasoning-base-url` | — | Base URL for self-hosted reasoning model endpoints |
+| `-o`, `--output` | — | Save the optimized prompt to this file |
+| `--results-json` | — | Save full results (iterations, scores, analysis) to JSON |
+| `--run-dir` | `.reflex/` | Directory for run history and checkpoints |
+| `--resume` | `false` | Resume the latest interrupted run for this dataset |
+| `--resume-from` | — | Resume a specific run by ID (e.g. `001`) or directory path |
+| `-v`, `--verbose` | `false` | Show detailed logs including timing |
+| `--version` | — | Show version and exit |
+
+### Examples
+
+```bash
+# Optimize llama to match gpt-4o-mini (live benchmark sets the target)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --target openai/gpt-4o-mini \
+  -o best_prompt.md
+
+# Multiple targets — the best score wins
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --target openai/gpt-4o-mini \
+  --target openai/gpt-4o \
+  -o best_prompt.md
+
+# Use existing verdict results as the target
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --verdict-results results.json \
+  -o best_prompt.md
+
+# Explicit threshold (overrides --target and --verdict-results)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --threshold 0.90 \
+  -o best_prompt.md
+
+# Auto strategy with defaults (threshold defaults to 0.85)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --max-workers 4 \
+  -o best_prompt.md
+
+# PDO with more rounds
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  -s pdo \
+  --max-iterations 50 \
+  --results-json results.json
+
+# Judge-only scoring (no ROUGE)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --judge openrouter/openai/gpt-4o-mini \
+  -o best_prompt.md
+
+# Use a local Ollama model for reasoning
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.2:1b \
+  --reasoning-model ollama/llama3.1:70b \
+  -o best_prompt.md
+
+# Use OpenAI for reasoning instead of Claude
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model openai/gpt-4o \
+  -o best_prompt.md
+
+# Self-hosted reasoning model (vLLM, TGI, etc.)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model openai/my-model \
+  --reasoning-base-url http://localhost:8000/v1
+```
+
+### Resume examples
+
+```bash
+# Resume the latest interrupted run for this dataset
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --resume
+
+# Resume a specific run by ID
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --resume-from 003
+
+# Use a custom run directory
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --run-dir ./my-experiments/.reflex \
+  -o best_prompt.md
+```
+
+## runs
+
+List all optimization runs and their status.
+
+```bash
+aevyra-reflex runs [OPTIONS]
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--run-dir` | `.reflex/` | Directory for run history |
+| `-v`, `--verbose` | `false` | Show config details for each run |
+
+### Output
+
+```
+  ID  Status        Strategy      Iters  Baseline      Best     Final  Dataset
+------------------------------------------------------------------------------------------
+ 001  ✓ completed   auto              5    0.5821    0.8612    0.8612  dataset.jsonl
+ 002  ⚡ interrupted  iterative        3    0.6100    0.7450         —  dataset.jsonl
+ 003  … running     structural        1         —         —         —  other.jsonl
+```
+
+Status icons: `✓` completed, `⚡` interrupted (resumable), `…` running.
+
+## dashboard
+
+Launch a local web UI for exploring optimization runs.
+
+```bash
+aevyra-reflex dashboard [OPTIONS]
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--run-dir` | `.reflex/` | Directory for run history |
+| `-p`, `--port` | `8337` | Port to serve on |
+| `--host` | `127.0.0.1` | Bind address |
+| `--no-open` | `false` | Don't open the browser automatically |
+
+The dashboard shows all runs with score trajectory charts, per-iteration
+prompt diffs, reasoning analysis, and configuration snapshots. It's a
+read-only view backed by the same `.reflex/` directory that `optimize`
+and `runs` use.
+
+## Provider format
+
+Models are specified as `provider/model`:
+
+| Provider | Format | API key env var |
+|----------|--------|-----------------|
+| Local (Ollama) | `local/llama3.1` | — |
+| OpenAI | `openai/gpt-5.4-nano` | `OPENAI_API_KEY` |
+| OpenRouter | `openrouter/meta-llama/llama-3.1-8b-instruct` | `OPENROUTER_API_KEY` |
+| Together | `together/meta-llama/Llama-3.1-8B-Instruct` | `TOGETHER_API_KEY` |
+| Fireworks | `fireworks/accounts/fireworks/models/llama-v3p1-8b-instruct` | `FIREWORKS_API_KEY` |
+| Groq | `groq/llama-3.1-8b-instant` | `GROQ_API_KEY` |
+| DeepInfra | `deepinfra/meta-llama/Llama-3.1-8B-Instruct` | `DEEPINFRA_API_KEY` |
+
+<Note>
+  Provider aliases resolve to OpenAI-compatible endpoints automatically. No need
+  to manually set `OPENAI_BASE_URL`.
+</Note>

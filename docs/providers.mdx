@@ -1,0 +1,194 @@
+---
+title: Providers & Models
+description: Choose which models power your optimization runs — reasoning agent and target model.
+---
+
+Reflex uses two different models in every run:
+
+- **Reasoning model** — the agent that diagnoses failures and rewrites prompts. This is where the intelligence lives. Defaults to Claude.
+- **Target model** — the model your prompt will actually run on. This is what you're benchmarking or optimizing for.
+
+They can be completely different providers. A common setup is Claude as the reasoning agent rewriting prompts for a GPT-4o target.
+
+---
+
+## Reasoning model (default: Claude)
+
+Reflex ships with **Anthropic Claude** as the default reasoning model — it's included when you `pip install aevyra-reflex`, no extra flags needed.
+
+The default model is `claude-sonnet-4-20250514`. It's fast, capable, and well-suited to the diagnostic reasoning reflex requires.
+
+**Default install:**
+
+```bash
+pip install aevyra-reflex
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+No `reasoning_model` or `reasoning_provider` configuration is needed. The default just works.
+
+### Changing the reasoning model
+
+Override it in `OptimizerConfig`:
+
+```python
+from aevyra_reflex import PromptOptimizer, OptimizerConfig
+
+optimizer = PromptOptimizer(
+    config=OptimizerConfig(
+        reasoning_model="claude-opus-4-6",
+        reasoning_provider="anthropic",  # optional if model name starts with "claude"
+    )
+)
+```
+
+Or via the CLI:
+
+```bash
+aevyra-reflex run \
+  --reasoning-model claude-opus-4-6 \
+  --dataset data.csv \
+  --provider openai --model gpt-4o-mini \
+  prompt.txt
+```
+
+### Using a different reasoning provider
+
+You can swap Claude for any OpenAI-compatible model or Ollama:
+
+```bash
+pip install aevyra-reflex[openai]
+```
+
+```python
+config = OptimizerConfig(
+    reasoning_model="gpt-4o",
+    reasoning_provider="openai",   # or omit — inferred from model name
+)
+```
+
+For Ollama (no SDK needed — uses `urllib` directly):
+
+```python
+config = OptimizerConfig(
+    reasoning_model="llama3:70b",
+    reasoning_provider="ollama",   # or set base_url to your Ollama server
+)
+```
+
+---
+
+## Target model providers
+
+The target model is the model your prompts actually run on during evals. Reflex passes each dataset example through it and scores the output.
+
+Install only the provider you need:
+
+```bash
+pip install aevyra-reflex[openai]      # OpenAI
+pip install aevyra-reflex[google]      # Gemini
+pip install aevyra-reflex[mistral]     # Mistral
+pip install aevyra-reflex[cohere]      # Cohere
+pip install aevyra-reflex[all]         # everything
+```
+
+Ollama and any OpenAI-compatible API (OpenRouter, Together, Fireworks, etc.) work with `[openai]` — no extra package required beyond `openai`.
+
+### Provider reference
+
+| Provider | Extra | Env var | Default model |
+|----------|-------|---------|---------------|
+| **Anthropic** | _(included)_ | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| **OpenAI** | `[openai]` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| **Google Gemini** | `[google]` | `GOOGLE_API_KEY` | `gemini-2.0-flash` |
+| **Mistral** | `[mistral]` | `MISTRAL_API_KEY` | `mistral-large-latest` |
+| **Cohere** | `[cohere]` | `COHERE_API_KEY` | `command-r-plus` |
+| **Ollama** | _(no SDK)_ | — | any local model |
+| **OpenRouter** | `[openai]` | `OPENROUTER_API_KEY` | any model |
+| **Together AI** | `[openai]` | `TOGETHER_API_KEY` | any model |
+| **Fireworks** | `[openai]` | `FIREWORKS_API_KEY` | any model |
+| **Groq** | `[openai]` | `GROQ_API_KEY` | any model |
+
+### Examples
+
+**OpenAI target:**
+
+```python
+optimizer = (
+    PromptOptimizer()
+    .set_dataset("data.csv")
+    .add_provider("openai", "gpt-4o-mini")
+    .add_metric(RougeScore())
+)
+```
+
+**Gemini target:**
+
+```python
+optimizer = (
+    PromptOptimizer()
+    .set_dataset("data.csv")
+    .add_provider("google", "gemini-2.0-flash")
+    .add_metric(RougeScore())
+)
+```
+
+**Ollama (local) target:**
+
+```python
+optimizer = (
+    PromptOptimizer()
+    .set_dataset("data.csv")
+    .add_provider("ollama", "llama3:8b")
+    .add_metric(RougeScore())
+)
+```
+
+**OpenRouter target** (any model available on OpenRouter):
+
+```python
+optimizer = (
+    PromptOptimizer()
+    .set_dataset("data.csv")
+    .add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
+    .add_metric(RougeScore())
+)
+```
+
+---
+
+## Mix and match
+
+The reasoning model and target model are fully independent. A typical cost-effective setup:
+
+```python
+optimizer = PromptOptimizer(
+    config=OptimizerConfig(
+        # Claude drives the reasoning (default)
+        reasoning_model="claude-sonnet-4-20250514",
+        # ...but we're optimizing a cheap Groq endpoint
+    )
+).set_dataset("data.csv").add_provider("groq", "llama-3.1-8b-instant")
+```
+
+Or use a powerful frontier model for both:
+
+```python
+config = OptimizerConfig(
+    reasoning_model="claude-opus-4-6",
+)
+optimizer = PromptOptimizer(config=config).add_provider("openai", "gpt-4o")
+```
+
+---
+
+## Missing SDK errors
+
+If you try to use a provider without its SDK installed, reflex raises a clear error:
+
+```
+ImportError: The OpenAI provider requires the openai package.
+Install it with: pip install aevyra-verdict[openai]
+```
+
+All provider SDKs are optional and loaded lazily — importing `aevyra_reflex` never fails due to a missing provider package.

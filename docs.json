@@ -1,0 +1,81 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "aevyra",
+  "colors": {
+    "primary": "#6E3FF3",
+    "light": "#A78BFA",
+    "dark": "#4C1D95"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Reflex",
+        "groups": [
+          {
+            "group": "Getting started",
+            "pages": [
+              "docs/introduction",
+              "docs/quickstart"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "docs/providers",
+              "docs/strategies",
+              "docs/cli",
+              "docs/configuration",
+              "docs/dashboard",
+              "docs/integrations",
+              "docs/analysis"
+            ]
+          },
+          {
+            "group": "API reference",
+            "pages": [
+              "docs/api/optimizer",
+              "docs/api/result"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/aevyraai"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "reflex",
+      "href": "https://github.com/aevyraai/reflex"
+    }
+  },
+  "redirects": [
+    { "source": "/docs/introduction",    "destination": "/reflex/introduction" },
+    { "source": "/docs/quickstart",      "destination": "/reflex/quickstart" },
+    { "source": "/docs/strategies",      "destination": "/reflex/strategies" },
+    { "source": "/docs/cli",             "destination": "/reflex/cli" },
+    { "source": "/docs/configuration",   "destination": "/reflex/configuration" },
+    { "source": "/docs/providers",        "destination": "/reflex/providers" },
+    { "source": "/docs/dashboard",        "destination": "/reflex/dashboard" },
+    { "source": "/docs/integrations",    "destination": "/reflex/integrations" },
+    { "source": "/docs/analysis",        "destination": "/reflex/analysis" },
+    { "source": "/docs/api/optimizer",   "destination": "/reflex/api/optimizer" },
+    { "source": "/docs/api/result",      "destination": "/reflex/api/result" }
+  ],
+  "footer": {
+    "socials": {
+      "github": "https://github.com/aevyraai"
+    }
+  }
+}

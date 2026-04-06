@@ -1,0 +1,101 @@
+---
+title: OptimizationResult
+description: API reference for OptimizationResult and supporting dataclasses.
+---
+
+## OptimizationResult
+
+Returned by `PromptOptimizer.run()`. Contains the optimized prompt, scores,
+iteration history, and analysis.
+
+### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `best_prompt` | `str` | The highest-scoring prompt found |
+| `best_score` | `float` | The score of the best prompt |
+| `iterations` | `list[IterationRecord]` | All iteration records |
+| `converged` | `bool` | Whether the score threshold was reached |
+| `baseline` | `EvalSnapshot \| None` | Baseline eval snapshot |
+| `final` | `EvalSnapshot \| None` | Final verification snapshot |
+| `strategy_name` | `str \| None` | Strategy that was used |
+| `phase_history` | `list[dict] \| None` | Auto mode phase breakdown |
+
+### Computed properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `score_trajectory` | `list[float]` | Score at each iteration |
+| `improvement` | `float \| None` | Absolute score improvement (final − baseline) |
+| `improvement_pct` | `float \| None` | Percentage improvement |
+
+### Methods
+
+#### `summary()`
+
+Returns a formatted string with scores, trajectory, strategy analysis,
+prompt diff, and before/after example.
+
+```python
+print(result.summary())
+```
+
+#### `to_dict()`
+
+Serialize to a dictionary.
+
+```python
+data = result.to_dict()
+```
+
+#### `to_json(path)`
+
+Save full results to a JSON file.
+
+```python
+from pathlib import Path
+result.to_json(Path("results.json"))
+```
+
+#### `save_best_prompt(path)`
+
+Write the optimized prompt to a text file.
+
+```python
+from pathlib import Path
+result.save_best_prompt(Path("best_prompt.md"))
+```
+
+## IterationRecord
+
+A single optimization iteration.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `iteration` | `int` | Iteration number |
+| `system_prompt` | `str` | The prompt used in this iteration |
+| `score` | `float` | Overall score |
+| `scores_by_metric` | `dict[str, float]` | Per-metric scores |
+| `reasoning` | `str` | Agent's reasoning for the change |
+
+## EvalSnapshot
+
+Scores from a single eval run (baseline or final).
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `mean_score` | `float` | Mean score across all samples |
+| `scores_by_metric` | `dict[str, float]` | Per-metric mean scores |
+| `system_prompt` | `str \| None` | The system prompt used |
+| `samples` | `list[SampleSnapshot]` | Per-sample results |
+
+## SampleSnapshot
+
+A single sample's input, output, and score.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `input` | `str` | The input prompt |
+| `response` | `str` | The model's response |
+| `ideal` | `str` | The reference answer |
+| `score` | `float` | Score for this sample |

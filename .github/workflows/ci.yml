@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 9 * * 1"  # Every Monday at 9am UTC
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit tests — no API keys or services needed, always runs
+  # ---------------------------------------------------------------------------
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/ -v --ignore=tests/test_ollama.py --ignore=tests/test_openrouter.py --ignore=tests/test_openai.py
+
+  # ---------------------------------------------------------------------------
+  # Ollama integration — pulls a small model, free, no secrets needed
+  # ---------------------------------------------------------------------------
+  ollama:
+    name: Ollama integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama server
+        run: ollama serve &
+
+      - name: Wait for Ollama to be ready
+        run: |
+          for i in $(seq 1 15); do
+            curl -s http://localhost:11434/api/tags && break
+            echo "Waiting for Ollama... ($i)"
+            sleep 2
+          done
+
+      - name: Pull model
+        run: ollama pull llama3.2:1b
+
+      - name: Run Ollama tests
+        run: pytest tests/test_ollama.py -v
+        if: hashFiles('tests/test_ollama.py') != ''
+
+  # ---------------------------------------------------------------------------
+  # OpenRouter integration — uses free-tier model, needs secret
+  # ---------------------------------------------------------------------------
+  openrouter:
+    name: OpenRouter integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Check API key is set
+        run: |
+          if [ -z "${{ secrets.OPENROUTER_API_KEY }}" ]; then
+            echo "OPENROUTER_API_KEY secret is not set. Add it in Settings → Secrets → Actions."
+            exit 1
+          fi
+
+      - name: Run OpenRouter tests
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: pytest tests/test_openrouter.py -v
+        if: hashFiles('tests/test_openrouter.py') != ''
+
+  # ---------------------------------------------------------------------------
+  # OpenAI integration — needs secret + funded account
+  # ---------------------------------------------------------------------------
+  openai:
+    name: OpenAI integration
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Check API key is set
+        run: |
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "OPENAI_API_KEY secret is not set. Add it in Settings → Secrets → Actions."
+            exit 1
+          fi
+
+      - name: Run OpenAI tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: pytest tests/test_openai.py -v
+        if: hashFiles('tests/test_openai.py') != ''

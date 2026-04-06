@@ -1,0 +1,92 @@
+---
+title: Introduction
+description: Agentic prompt optimization — an AI agent that diagnoses eval failures and rewrites prompts until your model hits the target score.
+---
+
+aevyra-reflex is an agentic prompt optimizer. Give it a dataset, a system prompt,
+and a target score — it diagnoses why your model is underperforming, reasons about
+the failure patterns, and rewrites the prompt until the scores match your target.
+All evaluation runs through [aevyra-verdict](https://github.com/aevyraai/verdict).
+
+## What it does
+
+Given a dataset and a starting prompt, aevyra-reflex:
+
+1. Sets a target score — from a verdict benchmark, a live model comparison, or an explicit threshold
+2. Runs a baseline eval with verdict to measure the starting score
+3. Analyzes failure patterns and rewrites the prompt to fix them
+4. Re-evaluates after each rewrite, iterating until the score meets the target
+5. Returns a before/after comparison with the optimized prompt
+
+## When to use it
+
+- You ran verdict and model A beats model B — you want to close the gap through prompt engineering, not by switching models
+- A model scores poorly on your eval — you want a better prompt, not a bigger model
+- You're iterating on a system prompt and want to automate the feedback loop
+- You want to understand *why* a prompt works (the analysis teaches prompt engineering)
+
+## Optimization strategies
+
+The **auto** strategy (default) picks the right technique for each phase.
+You can also run any strategy directly.
+
+<CardGroup cols={2}>
+  <Card title="Auto" icon="wand-magic-sparkles" href="/docs/strategies">
+    Multi-phase pipeline — structural → iterative → fewshot, chosen adaptively
+  </Card>
+  <Card title="Iterative" icon="arrows-spin" href="/docs/strategies#iterative">
+    Diagnose failures, revise wording, repeat
+  </Card>
+  <Card title="Structural" icon="table-columns" href="/docs/strategies#structural">
+    Reorganize formatting, sections, and hierarchy
+  </Card>
+  <Card title="PDO" icon="trophy" href="/docs/strategies#pdo">
+    Tournament-style search with dueling bandits
+  </Card>
+</CardGroup>
+
+## How it fits together
+
+```
+                ┌──────────────┐
+                │   Dataset    │
+                │  (JSONL)     │
+                └──────┬───────┘
+                       │
+                       ▼
+  ┌─────────────────────────────────────┐
+  │         aevyra-reflex               │
+  │                                     │
+  │  ┌───────────┐   ┌──────────────┐  │
+  │  │  Strategy  │──▶│  Reasoning   │  │
+  │  │  (auto)    │   │  model (LLM) │  │
+  │  └─────┬─────┘   └──────────────┘  │
+  │        │                            │
+  │        ▼                            │
+  │  ┌───────────┐                      │
+  │  │  verdict   │  ← evaluates each   │
+  │  │  (evals)   │    prompt revision   │
+  │  └───────────┘                      │
+  └─────────────────────────────────────┘
+                       │
+                       ▼
+              ┌────────────────┐
+              │ Optimized      │
+              │ system prompt  │
+              └────────────────┘
+```
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="bolt" href="/docs/quickstart">
+    Optimize your first prompt in under 5 minutes
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/docs/cli">
+    All commands and flags
+  </Card>
+  <Card title="Strategies" icon="chess" href="/docs/strategies">
+    How each optimization axis works
+  </Card>
+  <Card title="Configuration" icon="gear" href="/docs/configuration">
+    Tuning iterations, thresholds, and parallelism
+  </Card>
+</CardGroup>

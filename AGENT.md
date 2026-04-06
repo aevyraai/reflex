@@ -1,0 +1,50 @@
+# AGENT.md
+
+## Project overview
+
+aevyra-reflex is an agentic prompt optimizer. Given a JSONL eval dataset and a starting system prompt, it diagnoses why the model is underperforming, reasons about failure patterns, and iteratively rewrites the prompt until scores hit the target — all in a single command. It draws from four optimization axes (iterative, PDO, fewshot, structural) and adaptively picks the right one at each step.
+
+It depends on `aevyra-verdict` for evaluation (running completions, scoring with metrics like ROUGE/BLEU/ExactMatch/LLMJudge). For reasoning, it uses an LLM (Claude by default, but configurable to any model including local ones via `--reasoning-model`).
+
+## Architecture
+
+```
+src/aevyra_reflex/
+├── __init__.py          # Public API exports
+├── cli.py               # Typer CLI — single `optimize` command
+├── optimizer.py         # PromptOptimizer — orchestrates baseline → strategy → verify
+├── result.py            # OptimizationResult, EvalSnapshot, IterationRecord
+├── agent.py             # Claude agent wrapper (diagnosis, revision, judging)
+├── prompts.py           # All prompt templates for all strategies
+└── strategies/
+    ├── __init__.py      # Strategy registry
+    ├── base.py          # Abstract Strategy base class
+    ├── iterative.py     # Diagnose-revise loop
+    ├── pdo.py           # Dueling bandits with Thompson sampling
+    ├── fewshot.py       # Few-shot example selection and optimization
+    ├── structural.py    # Prompt structure and formatting optimization
+    └── auto.py          # Adaptive multi-phase (default — combines all axes)
+```
+
+## Key concepts
+
+- **PromptOptimizer.run()** does 3 steps: baseline eval → strategy optimization → verification eval
+- **Auto strategy** (default): Claude analyzes weaknesses → picks the best optimization axis → applies it for a few iterations → re-evaluates → picks next axis → repeat. Adaptively combines structural, iterative, fewshot, and pdo.
+- **Iterative strategy**: eval → find worst samples → Claude diagnoses → revised prompt → repeat
+- **PDO strategy**: pool of candidates → Thompson sampling picks duel pairs → pairwise judging → Copeland ranking → mutation → convergence
+- **Few-shot strategy**: bootstrap exemplars from high-scoring samples → Claude selects diverse subset → inject as few-shot examples → iterate
+- **Structural strategy**: generate structural variants (section reorder, markdown, XML tags, flat text) → evaluate all → keep best structure → iterate
+- All evaluation goes through `aevyra-verdict`'s EvalRunner
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+```
+
+## Conventions
+
+- Apache 2.0 license header on all `.py` files
+- Type hints everywhere, `from __future__ import annotations`
+- Logging via `logging.getLogger(__name__)`
+- CLI uses typer

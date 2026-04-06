@@ -1,0 +1,1629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>aevyra reflex</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230f1a28'/><ellipse cx='16' cy='16' rx='13' ry='3.5' fill='none' stroke='%23ff7700' stroke-width='1.2'/><ellipse cx='16' cy='16' rx='10' ry='2.2' fill='none' stroke='%23ffaa22' stroke-width='1'/><circle cx='16' cy='16' r='6.5' fill='%23000'/><circle cx='16' cy='16' r='6.5' fill='none' stroke='%23ffcc44' stroke-width='1'/><line x1='2' y1='16' x2='8' y2='16' stroke='%2344ddff' stroke-width='1.5' stroke-linecap='round'/><line x1='24' y1='16' x2='30' y2='16' stroke='%23cc66ff' stroke-width='1.5' stroke-linecap='round'/></svg>">
+<style>
+:root {
+  --bg-0: #06090f;
+  --bg-1: #0c1018;
+  --bg-2: #141a24;
+  --bg-3: #1e2836;
+  --border: #1e2a3a;
+  --text-0: #e0eaf0;
+  --text-1: #8aa0b8;
+  --text-2: #506878;
+  --accent: #00ddcc;
+  --accent-dim: #008877;
+  --accent-bright: #88ffee;
+  --green: #34d399;
+  --green-dim: #065f46;
+  --yellow: #fbbf24;
+  --yellow-dim: #78350f;
+  --red: #f87171;
+  --orange: #ff9922;
+  --ring: #ee7700;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --serif: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; background: var(--bg-0); color: var(--text-0); font-family: var(--sans); }
+a { color: var(--accent); text-decoration: none; cursor: pointer; }
+a:hover { text-decoration: underline; }
+
+.shell { display: flex; flex-direction: column; height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 24px; background: var(--bg-1); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.topbar-left { display: flex; align-items: center; gap: 14px; }
+.topbar-logo-mark { width: 32px; height: 32px; flex-shrink: 0; }
+.topbar-brand { display: flex; align-items: baseline; gap: 8px; }
+.topbar-aevyra { font-family: var(--serif); font-size: 16px; font-weight: 300; letter-spacing: 3px; color: var(--accent); }
+.topbar-reflex { font-size: 13px; font-weight: 600; color: var(--text-1); letter-spacing: 0.5px; }
+.topbar-sep { color: var(--border); font-weight: 300; font-size: 18px; }
+.topbar-nav a { padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--text-1); transition: all 0.15s; }
+.topbar-nav a:hover, .topbar-nav a.active { background: var(--bg-3); color: var(--text-0); text-decoration: none; }
+.main { flex: 1; overflow-y: auto; padding: 24px; max-width: 1400px; width: 100%; margin: 0 auto; }
+
+.card { background: var(--bg-1); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.card-title { font-size: 14px; font-weight: 600; color: var(--text-1); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+.badge-completed { background: var(--green-dim); color: var(--green); }
+.badge-interrupted { background: var(--yellow-dim); color: var(--yellow); }
+.badge-running { background: rgba(0,221,204,0.1); color: var(--accent); }
+
+table.runs { width: 100%; border-collapse: collapse; }
+table.runs th { text-align: left; padding: 10px 14px; font-size: 11px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+table.runs td { padding: 12px 14px; font-size: 13px; border-bottom: 1px solid var(--border); }
+table.runs tbody tr { cursor: pointer; transition: background 0.1s; }
+table.runs tbody tr:hover { background: var(--bg-2); }
+.mono { font-family: var(--mono); }
+.run-id { font-family: var(--mono); font-weight: 600; color: var(--accent-bright); }
+.muted { color: var(--text-2); }
+.ts { white-space: nowrap; font-size: 12px; }
+.green { color: var(--green); }
+.red { color: var(--red); }
+.small { font-size: 12px; }
+
+.stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.stat-box { background: var(--bg-2); border-radius: 8px; padding: 16px; }
+.stat-label { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.stat-value { font-size: 24px; font-weight: 700; font-family: var(--mono); }
+.improvement { font-size: 12px; color: var(--green); margin-top: 4px; }
+
+.chart-card { padding: 20px; }
+.chart-card svg { display: block; }
+
+.two-col { display: grid; grid-template-columns: 400px 1fr; gap: 20px; align-items: start; }
+.section { margin-bottom: 24px; }
+.section-title { font-size: 13px; font-weight: 600; color: var(--text-1); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+
+.iter-list { display: flex; flex-direction: column; gap: 8px; }
+.iter-item { display: flex; gap: 12px; padding: 14px; border-radius: 8px; background: var(--bg-2); cursor: pointer; transition: all 0.15s; }
+.iter-item:hover { background: var(--bg-3); }
+.iter-item.selected { background: var(--bg-3); border-left: 3px solid var(--accent-bright); }
+.iter-num { font-family: var(--mono); font-weight: 700; color: var(--accent-bright); font-size: 14px; min-width: 36px; }
+.iter-body { flex: 1; }
+.iter-score { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+.iter-delta { font-size: 12px; margin-left: 8px; }
+.iter-meta { font-size: 12px; color: var(--text-2); margin-top: 4px; }
+
+.prompt-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.prompt-tab { padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; background: var(--bg-2); color: var(--text-1); border: none; transition: all 0.15s; font-family: var(--sans); }
+.prompt-tab:hover { background: var(--bg-3); }
+.prompt-tab.active { background: var(--accent-dim); color: white; }
+
+.prompt-text { font-family: var(--mono); font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; padding: 16px; background: var(--bg-0); border-radius: 8px; border: 1px solid var(--border); max-height: 500px; overflow-y: auto; color: var(--text-0); }
+.diff-add { background: rgba(52,211,153,0.1); color: var(--green); }
+.diff-del { background: rgba(248,113,113,0.1); color: var(--red); }
+.diff-line { display: block; padding: 1px 8px; }
+
+.reasoning-text { font-size: 13px; line-height: 1.7; color: var(--text-1); white-space: pre-wrap; word-break: break-word; padding: 16px; background: var(--bg-0); border-radius: 8px; border: 1px solid var(--border); max-height: 300px; overflow-y: auto; }
+
+.config-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 13px; }
+.config-key { font-family: var(--mono); color: var(--text-2); }
+.config-val { font-family: var(--mono); color: var(--text-0); }
+
+.back-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; font-size: 13px; color: var(--text-1); background: var(--bg-2); border: none; cursor: pointer; margin-bottom: 16px; transition: all 0.15s; font-family: var(--sans); }
+.back-btn:hover { background: var(--bg-3); color: var(--text-0); }
+
+.empty-state { text-align: center; padding: 80px 20px; color: var(--text-2); }
+.empty-state h2 { font-size: 18px; color: var(--text-1); margin-bottom: 8px; }
+.empty-state code { font-family: var(--mono); background: var(--bg-2); padding: 2px 8px; border-radius: 4px; font-size: 13px; }
+
+/* ── Flow graph ──────────────────────────────────── */
+.flow-graph { position: relative; padding-left: 48px; padding-bottom: 20px; user-select: none; }
+.flow-spine { position: absolute; left: 20px; top: 28px; bottom: 28px; width: 2px; border-radius: 1px; }
+.flow-terminal {
+  position: relative; display: inline-flex; align-items: center; gap: 10px;
+  padding: 8px 16px; border-radius: 20px; font-size: 13px; margin: 4px 0;
+}
+.flow-terminal-dot {
+  position: absolute; left: -36px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--bg-1);
+}
+.flow-phase-block { margin-top: 14px; }
+.flow-phase-hdr {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  margin-bottom: 8px; padding: 4px 0;
+}
+.flow-phase-connector {
+  position: absolute; left: -28px; top: 50%; transform: translateY(-1px);
+  width: 26px; height: 2px; background: var(--border);
+}
+.flow-phase-dot {
+  position: absolute; left: -34px; top: 50%; transform: translate(-50%, -50%);
+  width: 8px; height: 8px; border-radius: 50%; opacity: 0.9;
+}
+.flow-phase-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 10px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+}
+.flow-phase-meta { font-size: 11px; color: var(--text-2); }
+.flow-node-wrap { position: relative; margin: 5px 0; }
+.flow-node-connector {
+  position: absolute; left: -28px; top: 50%; transform: translateY(-1px);
+  width: 26px; height: 2px; background: var(--border);
+}
+.flow-node-dot {
+  position: absolute; left: -34px; top: 50%; transform: translate(-50%, -50%);
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--bg-1); border: 2px solid var(--border); box-sizing: border-box;
+  transition: border-color 0.15s, background 0.15s;
+}
+.flow-node-card {
+  padding: 10px 14px; background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 8px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.flow-node-card:hover { border-color: var(--accent); background: rgba(0,221,204,0.04); }
+.flow-node-card.selected { border-color: var(--accent); background: rgba(0,221,204,0.08); }
+.flow-node-top { display: flex; align-items: center; gap: 10px; }
+.flow-node-num { font-family: var(--mono); font-weight: 700; font-size: 11px; min-width: 26px; }
+.flow-node-score { font-family: var(--mono); font-size: 18px; font-weight: 700; color: #fff; }
+.flow-node-delta { font-family: var(--mono); font-size: 11px; }
+.flow-node-best {
+  margin-left: auto; font-size: 10px; font-weight: 700; padding: 1px 7px;
+  border-radius: 10px; background: rgba(0,204,119,0.15); color: #00cc77;
+  border: 1px solid rgba(0,204,119,0.3);
+}
+.flow-score-bar { margin-top: 7px; height: 3px; background: var(--border); border-radius: 2px; position: relative; overflow: visible; }
+.flow-score-fill { height: 100%; border-radius: 2px; transition: width 0.4s; }
+.flow-score-threshold {
+  position: absolute; top: -3px; width: 2px; height: 9px;
+  background: rgba(255,255,255,0.35); border-radius: 1px;
+}
+.flow-node-metrics { font-size: 11px; color: var(--text-2); margin-top: 5px; font-family: var(--mono); }
+.flow-node-time { font-size: 10px; color: var(--text-2); margin-top: 3px; opacity: 0.7; }
+
+@keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+.pulse { animation: pulse 1.5s infinite; }
+.loading { text-align: center; padding: 40px; color: var(--text-2); }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 3px; }
+
+/* Tooltip for chart */
+.chart-tooltip { position: absolute; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 12px; pointer-events: none; z-index: 10; white-space: nowrap; }
+.chart-tooltip .tt-label { color: var(--text-2); margin-bottom: 2px; }
+.chart-tooltip .tt-value { font-family: var(--mono); font-weight: 600; color: var(--accent-bright); }
+
+/* ── New Run form ──────────────────────────────────── */
+.form-wrap { max-width: 720px; }
+.form-group { margin-bottom: 18px; }
+.form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-1); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 7px; }
+.form-label span { font-weight: 400; color: var(--text-2); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.form-input, .form-textarea, .form-select {
+  width: 100%; background: var(--bg-0); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--text-0); font-family: var(--sans); font-size: 13px; padding: 9px 12px;
+  outline: none; transition: border-color 0.15s;
+}
+.form-textarea { font-family: var(--mono); font-size: 12px; line-height: 1.65; resize: vertical; min-height: 180px; }
+.form-input:focus, .form-textarea:focus, .form-select:focus { border-color: var(--accent); }
+.form-select option { background: var(--bg-2); }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-hint { font-size: 11px; color: var(--text-2); margin-top: 5px; }
+.form-hint code { font-family: var(--mono); background: var(--bg-3); padding: 1px 5px; border-radius: 3px; }
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 20px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: all 0.15s; font-family: var(--sans); }
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-bright); }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-ghost { background: var(--bg-2); color: var(--text-1); }
+.btn-ghost:hover { background: var(--bg-3); color: var(--text-0); }
+.btn-danger { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
+.btn-danger:hover { background: rgba(248,113,113,0.25); }
+.new-run-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; background: var(--accent); color: #000; border: none; font-family: var(--sans); transition: all 0.15s; }
+.new-run-btn:hover { background: var(--accent-bright); }
+
+/* ── Live run progress ─────────────────────────────── */
+.live-header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
+.live-status { font-size: 13px; color: var(--text-1); }
+.live-grid { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
+.live-log { background: var(--bg-0); border: 1px solid var(--border); border-radius: 8px; padding: 14px; font-family: var(--mono); font-size: 12px; line-height: 1.7; max-height: 420px; overflow-y: auto; }
+.log-line { display: flex; gap: 10px; }
+.log-ts { color: var(--text-2); flex-shrink: 0; }
+.log-msg { color: var(--text-1); }
+.log-msg.score { color: var(--accent-bright); }
+.log-msg.error { color: var(--red); }
+.log-msg.done { color: var(--green); }
+.live-score-big { font-family: var(--mono); font-size: 42px; font-weight: 700; color: var(--accent-bright); }
+.live-score-label { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+.live-iter-track { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.live-iter-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.live-iter-num { font-family: var(--mono); color: var(--text-2); min-width: 24px; }
+.live-iter-bar-wrap { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.live-iter-bar { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s; }
+.live-iter-score { font-family: var(--mono); color: var(--text-0); min-width: 52px; text-align: right; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <div class="topbar">
+    <div class="topbar-left">
+      <svg class="topbar-logo-mark" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="tbg" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#0f1a28"/><stop offset="100%" stop-color="#060c14"/></radialGradient>
+          <filter id="tglow"><feGaussianBlur stdDeviation="1.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <!-- Background -->
+        <circle cx="16" cy="16" r="15.5" fill="url(#tbg)"/>
+        <!-- Outer accretion disk glow -->
+        <ellipse cx="16" cy="16" rx="13.5" ry="3.8" fill="none" stroke="#ff6600" stroke-width="2.5" opacity="0.25" filter="url(#tglow)"/>
+        <!-- Accretion disk rings -->
+        <ellipse cx="16" cy="16" rx="13.5" ry="3.8" fill="none" stroke="#cc4400" stroke-width="1.2" opacity="0.7"/>
+        <ellipse cx="16" cy="16" rx="12"   ry="3"   fill="none" stroke="#ff7700" stroke-width="1"   opacity="0.85"/>
+        <ellipse cx="16" cy="16" rx="10"   ry="2.2" fill="none" stroke="#ffaa22" stroke-width="0.8" opacity="0.95"/>
+        <ellipse cx="16" cy="16" rx="8.5"  ry="1.6" fill="none" stroke="#ffcc55" stroke-width="0.6"/>
+        <!-- Black hole -->
+        <circle cx="16" cy="16" r="6.5" fill="#000"/>
+        <!-- Event horizon glow -->
+        <circle cx="16" cy="16" r="6.5" fill="none" stroke="#ff9922" stroke-width="1.8" opacity="0.6" filter="url(#tglow)"/>
+        <circle cx="16" cy="16" r="6.5" fill="none" stroke="#ffcc44" stroke-width="0.8"/>
+        <!-- Left signal wave (blue) -->
+        <line x1="2"  y1="16" x2="8"  y2="16" stroke="#44ddff" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="2"  y1="16" x2="8"  y2="16" stroke="#00aaff" stroke-width="3"   stroke-linecap="round" opacity="0.2" filter="url(#tglow)"/>
+        <!-- Right signal wave (purple) -->
+        <line x1="24" y1="16" x2="30" y2="16" stroke="#cc66ff" stroke-width="1.5" stroke-linecap="round"/>
+        <line x1="24" y1="16" x2="30" y2="16" stroke="#9922ee" stroke-width="3"   stroke-linecap="round" opacity="0.2" filter="url(#tglow)"/>
+      </svg>
+      <div class="topbar-brand">
+        <span class="topbar-aevyra">AEVYRA</span>
+        <span class="topbar-sep">/</span>
+        <span class="topbar-reflex">reflex</span>
+      </div>
+    </div>
+    <div class="topbar-nav" style="display:flex;align-items:center;gap:8px">
+      <a href="#/" id="nav-runs">Runs</a>
+      <a href="#/new" id="nav-new" class="new-run-btn">+ New Run</a>
+    </div>
+  </div>
+  <div class="main" id="app">
+    <div class="loading"><span class="pulse">Loading...</span></div>
+  </div>
+</div>
+
+<script>
+// ── Helpers ──────────────────────────────────────────────────
+const $ = (sel, ctx) => (ctx || document).querySelector(sel);
+const $$ = (sel, ctx) => [...(ctx || document).querySelectorAll(sel)];
+const el = (tag, attrs, ...children) => {
+  const e = document.createElement(tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => {
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
+    else if (k === 'html') e.innerHTML = v;
+    else e.setAttribute(k, v);
+  });
+  children.flat(Infinity).forEach(c => {
+    if (c == null || c === false) return;
+    e.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(c) : c);
+  });
+  return e;
+};
+const svgEl = (tag, attrs, ...children) => {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+  children.flat(Infinity).forEach(c => {
+    if (c == null) return;
+    e.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  });
+  return e;
+};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    let msg = 'API error: ' + r.status;
+    try { const d = await r.json(); if (d.error) msg = d.error; } catch (_) {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+const fmtScore = (s, d=4) => s == null ? '--' : s.toFixed(d);
+const fmtTime = (iso) => {
+  if (!iso) return '--';
+  try {
+    // Stored as "2026-04-04T10-32-15" (hyphens in time for dir-name compat)
+    // Normalize to proper ISO before parsing
+    const normalized = iso.replace(/T(\d{2})-(\d{2})-(\d{2})/, 'T$1:$2:$3');
+    const d = new Date(normalized);
+    if (isNaN(d.getTime())) return iso;
+    const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return date + '\u00a0' + time;
+  } catch { return iso; }
+};
+const statusIcon = { completed: '\u2713', interrupted: '\u26A1', running: '\u2026' };
+
+function badge(status) {
+  return el('span', { class: 'badge badge-' + status }, (statusIcon[status] || '?') + ' ' + status);
+}
+
+// ── SVG Area Chart ───────────────────────────────────────────
+function areaChart(data, { width = 700, height = 260, threshold = null } = {}) {
+  const pad = { top: 20, right: 60, bottom: 36, left: 55 };
+  const w = width - pad.left - pad.right;
+  const h = height - pad.top - pad.bottom;
+
+  const scores = data.map(d => d.score);
+  let yMin = Math.min(...scores), yMax = Math.max(...scores);
+  if (threshold != null) { yMin = Math.min(yMin, threshold); yMax = Math.max(yMax, threshold); }
+  const yPad = (yMax - yMin) * 0.15 || 0.05;
+  yMin = Math.max(0, yMin - yPad);
+  yMax = yMax + yPad;
+
+  const xScale = (i) => pad.left + (data.length > 1 ? (i / (data.length - 1)) * w : w / 2);
+  const yScale = (v) => pad.top + h - ((v - yMin) / (yMax - yMin)) * h;
+
+  // Build path
+  const points = data.map((d, i) => [xScale(i), yScale(d.score)]);
+  const linePath = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0] + ',' + p[1]).join(' ');
+  const areaPath = linePath + ' L' + points[points.length - 1][0] + ',' + (pad.top + h) + ' L' + points[0][0] + ',' + (pad.top + h) + ' Z';
+
+  const container = el('div', { style: { position: 'relative' } });
+
+  const svg = svgEl('svg', { width, height, viewBox: '0 0 ' + width + ' ' + height });
+
+  // Gradient
+  const defs = svgEl('defs');
+  const grad = svgEl('linearGradient', { id: 'areaGrad', x1: '0', y1: '0', x2: '0', y2: '1' });
+  grad.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#00ddcc', 'stop-opacity': '0.3' }));
+  grad.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#00ddcc', 'stop-opacity': '0.02' }));
+  defs.appendChild(grad);
+  svg.appendChild(defs);
+
+  // Grid lines
+  const yTicks = 5;
+  for (let i = 0; i <= yTicks; i++) {
+    const v = yMin + (yMax - yMin) * (i / yTicks);
+    const y = yScale(v);
+    svg.appendChild(svgEl('line', { x1: pad.left, y1: y, x2: pad.left + w, y2: y, stroke: '#1e2a3a', 'stroke-dasharray': '3,3' }));
+    svg.appendChild(svgEl('text', { x: pad.left - 8, y: y + 4, fill: '#506878', 'font-size': '11', 'text-anchor': 'end', 'font-family': 'var(--mono)' }, v.toFixed(2)));
+  }
+
+  // X labels
+  data.forEach((d, i) => {
+    const x = xScale(i);
+    svg.appendChild(svgEl('text', { x, y: pad.top + h + 22, fill: '#506878', 'font-size': '11', 'text-anchor': 'middle', 'font-family': 'var(--sans)' }, d.name));
+  });
+
+  // Threshold line
+  if (threshold != null) {
+    const ty = yScale(threshold);
+    svg.appendChild(svgEl('line', { x1: pad.left, y1: ty, x2: pad.left + w, y2: ty, stroke: '#34d399', 'stroke-dasharray': '6,4', 'stroke-width': '1.5' }));
+    svg.appendChild(svgEl('text', { x: pad.left + w + 6, y: ty + 4, fill: '#34d399', 'font-size': '11', 'font-family': 'var(--mono)' }, 'Target ' + threshold));
+  }
+
+  // Area + line
+  svg.appendChild(svgEl('path', { d: areaPath, fill: 'url(#areaGrad)' }));
+  svg.appendChild(svgEl('path', { d: linePath, fill: 'none', stroke: '#00ddcc', 'stroke-width': '2.5', 'stroke-linejoin': 'round' }));
+
+  // Dots
+  const tooltip = el('div', { class: 'chart-tooltip', style: { display: 'none' } });
+  points.forEach((p, i) => {
+    const dot = svgEl('circle', { cx: p[0], cy: p[1], r: '5', fill: '#00ddcc', stroke: '#06090f', 'stroke-width': '2', style: 'cursor:pointer' });
+    // Larger invisible hit area
+    const hit = svgEl('circle', { cx: p[0], cy: p[1], r: '16', fill: 'transparent', style: 'cursor:pointer' });
+    hit.addEventListener('mouseenter', (e) => {
+      dot.setAttribute('r', '7');
+      tooltip.innerHTML = '<div class="tt-label">' + data[i].name + '</div><div class="tt-value">' + data[i].score.toFixed(4) + '</div>';
+      tooltip.style.display = 'block';
+      tooltip.style.left = (p[0] - 30) + 'px';
+      tooltip.style.top = (p[1] - 52) + 'px';
+    });
+    hit.addEventListener('mouseleave', () => {
+      dot.setAttribute('r', '5');
+      tooltip.style.display = 'none';
+    });
+    svg.appendChild(dot);
+    svg.appendChild(hit);
+  });
+
+  container.appendChild(svg);
+  container.appendChild(tooltip);
+  return container;
+}
+
+// ── Diff ─────────────────────────────────────────────────────
+function computeDiff(oldText, newText) {
+  const a = (oldText || '').split('\n'), b = (newText || '').split('\n');
+  const m = a.length, n = b.length;
+  if (m + n > 2000) return b.map(l => ({ t: '=', s: l }));
+
+  const dp = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+
+  let i = m, j = n;
+  const ops = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i-1] === b[j-1]) { ops.push({ t: '=', s: a[i-1] }); i--; j--; }
+    else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) { ops.push({ t: '+', s: b[j-1] }); j--; }
+    else { ops.push({ t: '-', s: a[i-1] }); i--; }
+  }
+  return ops.reverse();
+}
+
+// ── Runs List Page ───────────────────────────────────────────
+async function renderRunsList() {
+  const app = $('#app');
+  app.innerHTML = '<div class="loading"><span class="pulse">Loading runs...</span></div>';
+
+  let runs;
+  try { runs = await api('/api/runs'); } catch (e) {
+    app.innerHTML = '';
+    app.appendChild(el('div', { class: 'empty-state' }, el('h2', null, 'Error loading runs'), el('p', null, e.message)));
+    return;
+  }
+
+  app.innerHTML = '';
+
+  if (runs.length === 0) {
+    app.appendChild(el('div', { class: 'empty-state' },
+      el('h2', null, 'No runs yet'),
+      el('p', { style: { marginBottom: '16px' } }, 'Start your first optimization run from the UI or the CLI:'),
+      el('button', { class: 'btn btn-primary', style: { marginBottom: '16px' }, onClick: () => { location.hash = '/new'; } }, '+ New Run'),
+      el('p', null, el('code', null, 'aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1'))
+    ));
+    return;
+  }
+
+  const header = el('div', { class: 'card-header' },
+    el('span', { class: 'card-title' }, 'Optimization Runs'),
+    el('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
+      el('span', { class: 'muted', style: { fontSize: '13px' } }, runs.length + ' run' + (runs.length !== 1 ? 's' : '')),
+      el('button', { class: 'new-run-btn', onClick: () => { location.hash = '/new'; } }, '+ New Run')
+    )
+  );
+
+  const thead = el('thead', null,
+    el('tr', null, ...['ID','Created','Status','Strategy','Model','Iters','Baseline','Best','Target','Dataset','Reasoning'].map(h => el('th', null, h)))
+  );
+
+  // Re-sort runs so each branch appears immediately after its parent
+  const runsById = {};
+  runs.forEach(r => { runsById[r.run_id] = r; });
+  const childrenOf = {};
+  runs.forEach(r => {
+    if (r.parent_run_id) {
+      if (!childrenOf[r.parent_run_id]) childrenOf[r.parent_run_id] = [];
+      childrenOf[r.parent_run_id].push(r);
+    }
+  });
+  const sortedRuns = [];
+  runs.forEach(r => {
+    if (!r.parent_run_id) {
+      sortedRuns.push(r);
+      (childrenOf[r.run_id] || []).forEach(child => sortedRuns.push(child));
+    }
+  });
+
+  const tbody = el('tbody');
+  sortedRuns.forEach(r => {
+    const isChild = !!r.parent_run_id;
+    const ds = r.dataset ? r.dataset.split('/').pop() : '--';
+    const rm = (r.config && r.config.reasoning_model) || '--';
+    const targetCell = (() => {
+      if (!r.config) return el('td', { class: 'muted small' }, '--');
+      const thresh = r.config.score_threshold != null ? fmtScore(r.config.score_threshold) : null;
+      const src = r.config.target_source;
+      const isVerdict = src === 'verdict_json' || src === 'verdict_run';
+      if (!isVerdict) {
+        // Plain target score only
+        return el('td', { class: 'mono muted small' }, thresh || '--');
+      }
+      const model = r.config.target_model || '?';
+      const wrap = el('td', { class: 'small' });
+      const modelSpan = el('span', { class: 'mono', style: 'color:var(--accent-bright)' }, model);
+      const threshSpan = el('span', { class: 'muted', style: 'margin-left:5px' }, '@ ' + (thresh || '?'));
+      const srcBadge = el('span', {
+        style: 'margin-left:6px;padding:1px 6px;font-size:10px;border-radius:4px;background:rgba(0,136,119,0.2);color:var(--accent-dim);font-family:var(--mono)'
+      }, src === 'verdict_json' ? 'json' : 'run');
+      wrap.appendChild(modelSpan);
+      wrap.appendChild(threshSpan);
+      wrap.appendChild(srcBadge);
+      return wrap;
+    })();
+    const idCell = el('td', { style: isChild ? 'padding-left:20px' : '' });
+    if (isChild) {
+      idCell.appendChild(el('span', { style: 'color:var(--text-2);margin-right:4px;font-size:11px' }, '└─'));
+      const branchBadge = el('span', {
+        style: 'font-size:9px;padding:1px 5px;border-radius:4px;background:rgba(107,138,255,0.15);color:#6b8aff;font-family:var(--mono);margin-right:4px;vertical-align:middle'
+      }, '⎇ ' + r.parent_run_id + '/' + r.parent_iteration);
+      idCell.appendChild(branchBadge);
+    }
+    idCell.appendChild(el('span', { class: 'run-id' }, r.run_id));
+
+    const row = el('tr', { onClick: () => { location.hash = '/runs/' + r.run_id; } },
+      idCell,
+      el('td', { class: 'muted small ts' }, fmtTime(r.timestamp)),
+      el('td', null, badge(r.status)),
+      el('td', null, r.strategy || '--'),
+      el('td', { class: 'muted small' }, (() => {
+        if (!r.config) return '--';
+        const cli = r.config._cli_models;
+        if (cli && cli.length) return cli.join(', ');
+        return '--';
+      })()),
+      el('td', { class: 'mono' }, String(r.iterations_completed)),
+      el('td', { class: 'mono' }, fmtScore(r.baseline_score)),
+      el('td', { class: 'mono' + (r.best_score != null ? ' green' : '') }, fmtScore(r.best_score)),
+      targetCell,
+      (() => {
+        // Derive absolute path from run_dir (3 levels up from run dir = project root)
+        const fullPath = (() => {
+          if (!r.dataset) return '';
+          if (r.dataset.startsWith('/')) return r.dataset;
+          if (!r.run_dir) return r.dataset;
+          const projectRoot = r.run_dir.split('/').slice(0, -3).join('/');
+          return projectRoot ? projectRoot + '/' + r.dataset : r.dataset;
+        })();
+        const td = el('td', { class: 'muted small', style: 'cursor:pointer; white-space:nowrap' }, ds);
+        let expanded = false;
+        td.addEventListener('click', (e) => {
+          e.stopPropagation();
+          expanded = !expanded;
+          td.textContent = '';
+          if (expanded) {
+            td.style.color = 'var(--text-1)';
+            td.style.fontFamily = 'var(--mono)';
+            td.style.fontSize = '11px';
+            td.appendChild(document.createTextNode(fullPath || ds));
+          } else {
+            td.style.color = '';
+            td.style.fontFamily = '';
+            td.style.fontSize = '';
+            td.appendChild(document.createTextNode(ds));
+          }
+        });
+        return td;
+      })(),
+      el('td', { class: 'muted small' }, rm),
+    );
+    tbody.appendChild(row);
+  });
+
+  const table = el('table', { class: 'runs' }, thead, tbody);
+  const card = el('div', { class: 'card' }, header, table);
+  app.appendChild(card);
+}
+
+// ── Flow Graph ───────────────────────────────────────────────
+const PHASE_COLORS = {
+  structural: '#00ddcc',
+  iterative:  '#3399ff',
+  fewshot:    '#aa55ff',
+  pdo:        '#ff8833',
+};
+const phaseColor = (name) => PHASE_COLORS[name] || '#00ddcc';
+
+function parsePhase(reasoning) {
+  const m = reasoning && reasoning.match(/^\[(\w+)\]/);
+  return m ? m[1] : null;
+}
+
+function groupPhases(iterations, strategy) {
+  const isAuto = strategy === 'auto';
+  if (!isAuto) return [{ name: strategy || 'iterative', iters: iterations }];
+  const phases = [];
+  let cur = null;
+  for (const it of iterations) {
+    const name = parsePhase(it.reasoning) || 'iterative';
+    if (!cur || cur.name !== name) { cur = { name, iters: [] }; phases.push(cur); }
+    cur.iters.push(it);
+  }
+  return phases;
+}
+
+function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelect, onBranch) {
+  const strategy = (optConfig && optConfig.strategy) || '';
+  const threshold = optConfig && optConfig.score_threshold;
+  const phases = groupPhases(iterations, strategy);
+  const allIters = phases.flatMap(p => p.iters);
+
+  // ── Layout: single vertical chain ─────────────────────
+  // Phases are sequential — each phase header sits between the previous
+  // phase's last iteration and this phase's first iteration.
+  // Horizontal branching only appears when iterations are truly parallel
+  // (future feature). For now everything flows straight down.
+  const CW = 360;
+  const NW = 284;       // iteration card width
+  const PH = 32;        // phase header height
+  const TH = 44;        // terminal height
+  const TW = 260;       // terminal width
+  const nx = (CW - NW) / 2;
+  const tx = (CW - TW) / 2;
+  const MX = CW / 2;   // center x for edges
+
+  const V_TERM  = 44;   // gap after terminal
+  const V_PHASE = 16;   // gap before/after phase header
+  const V_NODE  = 10;   // gap between iteration nodes
+  const V_BEST  = 40;   // gap before best terminal
+
+  // Build flat layout list
+  const layout = [];
+  let y = 0;
+
+  // Baseline
+  layout.push({ type: 'baseline', y, h: TH }); y += TH + V_TERM;
+
+  phases.forEach((phase) => {
+    layout.push({ type: 'phase', y, h: PH, phase }); y += PH + V_PHASE;
+    phase.iters.forEach((it, ii) => {
+      layout.push({ type: 'iter', y, h: 86, it, phase });
+      y += 86 + (ii < phase.iters.length - 1 ? V_NODE : V_PHASE);
+    });
+  });
+
+  // Best
+  y += V_BEST - V_PHASE;
+  layout.push({ type: 'best', y, h: TH });
+  const TOTAL_H = y + TH + 20;
+
+  // ── Container + SVG overlay ───────────────────────────
+  const wrap = el('div', { style: `position:relative;width:${CW}px;height:${TOTAL_H}px;margin:0 auto` });
+  const svg = svgEl('svg', { width: CW, height: TOTAL_H,
+    style: 'position:absolute;top:0;left:0;pointer-events:none;overflow:visible' });
+  wrap.appendChild(svg);
+
+  function vline(x, y1, y2, color, op) {
+    svg.appendChild(svgEl('line', { x1: x, y1, x2: x, y2,
+      stroke: color, 'stroke-width': '1.5', 'stroke-opacity': String(op ?? 0.45) }));
+  }
+
+  function place(node, x, y, w) {
+    Object.assign(node.style, { position: 'absolute', left: x+'px', top: y+'px',
+      width: w+'px', boxSizing: 'border-box' });
+    return node;
+  }
+
+  function termNode(label, score, color, hint) {
+    const n = el('div', { style: `display:flex;align-items:center;gap:10px;padding:10px 18px;border-radius:22px;background:${color}18;border:1px solid ${color}44;box-sizing:border-box` });
+    n.appendChild(el('span', { style: 'color:var(--text-2);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px' }, label));
+    n.appendChild(el('span', { style: `font-family:var(--mono);font-weight:700;color:${color};font-size:16px` }, fmtScore(score)));
+    if (hint) n.appendChild(el('span', { style: `color:${color};font-size:11px;opacity:0.85` }, hint));
+    return n;
+  }
+
+  // ── Render layout ─────────────────────────────────────
+  const allRefs = [];
+
+  layout.forEach((item, idx) => {
+    const next = layout[idx + 1];
+
+    if (item.type === 'baseline') {
+      const hint = threshold != null ? 'target ' + fmtScore(threshold) : null;
+      wrap.appendChild(place(termNode('Baseline', baselineScore, '#00ddcc', hint), tx, item.y, TW));
+      if (next) {
+        const nextColor = next.type === 'phase' ? phaseColor(next.phase.name) : '#00ddcc';
+        vline(MX, item.y + TH, next.y, nextColor, 0.5);
+      }
+    }
+
+    else if (item.type === 'phase') {
+      const color = phaseColor(item.phase.name);
+      const hdr = el('div', { style: `display:flex;align-items:center;justify-content:center;gap:7px;padding:6px 14px;border-radius:12px;background:${color}18;border:1px solid ${color}44;box-sizing:border-box` });
+      hdr.appendChild(el('span', { style: `font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${color}` }, item.phase.name));
+      hdr.appendChild(el('span', { style: 'font-size:10px;color:var(--text-2)' }, '×' + item.phase.iters.length));
+      wrap.appendChild(place(hdr, nx, item.y, NW));
+      if (next) vline(MX, item.y + PH, next.y, color, 0.45);
+    }
+
+    else if (item.type === 'iter') {
+      const color = phaseColor(item.phase.name);
+      const it = item.it;
+      const gi = allIters.findIndex(x => x.iteration === it.iteration);
+      const prevScore = gi === 0 ? baselineScore : allIters[gi - 1].score;
+      const delta = prevScore != null ? it.score - prevScore : null;
+      const isBest = bestScore != null && Math.abs(it.score - bestScore) < 0.0001;
+      const dc = delta == null ? color : delta > 0.0005 ? '#00cc77' : delta < -0.0005 ? '#ff4455' : '#888';
+
+      const card = el('div', { class: 'flow-node-card', style: 'box-sizing:border-box;padding:10px 14px' });
+
+      const top = el('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:6px' });
+      top.appendChild(el('span', { style: `font-family:var(--mono);font-weight:700;font-size:11px;color:${color};min-width:24px` }, '#' + it.iteration));
+      top.appendChild(el('span', { style: 'font-family:var(--mono);font-size:17px;font-weight:700;color:#fff;flex:1' }, fmtScore(it.score)));
+      if (delta != null) top.appendChild(el('span', { style: `font-family:var(--mono);font-size:11px;color:${dc}` }, (delta >= 0 ? '+' : '') + delta.toFixed(4)));
+      if (isBest) top.appendChild(el('span', { class: 'flow-node-best' }, '★'));
+
+      // Branch button — visible on hover
+      if (onBranch) {
+        const branchBtn = el('span', {
+          title: 'Branch from this iteration',
+          style: 'margin-left:auto;font-size:11px;cursor:pointer;color:#6b8aff;opacity:0;transition:opacity 0.15s;padding:2px 6px;border-radius:4px;background:rgba(107,138,255,0.12);flex-shrink:0'
+        }, '⎇');
+        branchBtn.addEventListener('click', (e) => { e.stopPropagation(); onBranch(it); });
+        card.addEventListener('mouseenter', () => { branchBtn.style.opacity = '1'; });
+        card.addEventListener('mouseleave', () => { branchBtn.style.opacity = '0'; });
+        top.appendChild(branchBtn);
+      }
+
+      card.appendChild(top);
+
+      const bar = el('div', { class: 'flow-score-bar' });
+      bar.appendChild(el('div', { class: 'flow-score-fill', style: `width:${Math.min(it.score*100,100).toFixed(1)}%;background:linear-gradient(to right,${color},${color}88)` }));
+      if (threshold != null) bar.appendChild(el('div', { class: 'flow-score-threshold', style: `left:${(threshold*100).toFixed(1)}%` }));
+      card.appendChild(bar);
+
+      if (it.scores_by_metric && Object.keys(it.scores_by_metric).length) {
+        card.appendChild(el('div', { style: 'font-size:10px;color:var(--text-2);margin-top:5px;font-family:var(--mono)' },
+          Object.entries(it.scores_by_metric).map(([k, v]) => k + ': ' + v.toFixed(3)).join(' · ')));
+      }
+      if (it.timestamp) card.appendChild(el('div', { style: 'font-size:10px;color:var(--text-2);margin-top:3px;opacity:0.65' }, fmtTime(it.timestamp)));
+
+      wrap.appendChild(place(card, nx, item.y, NW));
+      allRefs.push({ it, cardEl: card });
+
+      if (next) {
+        const nextColor = next.type === 'phase' ? phaseColor(next.phase.name)
+                        : next.type === 'iter'  ? color : '#00cc77';
+        vline(MX, item.y + 86, next.y, nextColor, 0.45);
+      }
+    }
+
+    else if (item.type === 'best') {
+      let hint = null;
+      if (bestScore != null && baselineScore != null) {
+        const imp = bestScore - baselineScore;
+        if (imp > 0.0001) hint = '+' + imp.toFixed(4) + ' (' + (imp / baselineScore * 100).toFixed(1) + '%)';
+      }
+      wrap.appendChild(place(termNode('Best', bestScore, '#00cc77', hint), tx, item.y, TW));
+    }
+  });
+
+  // ── Selection ─────────────────────────────────────────
+  function selectNode(it, cardEl) {
+    allRefs.forEach(n => n.cardEl.classList.remove('selected'));
+    cardEl.classList.add('selected');
+    if (onSelect) onSelect(it);
+  }
+  allRefs.forEach(({ it, cardEl }) => cardEl.addEventListener('click', () => selectNode(it, cardEl)));
+  if (allRefs.length > 0) allRefs[allRefs.length - 1].cardEl.classList.add('selected');
+
+  const scroller = el('div', { style: 'overflow-y:auto;padding:16px 8px 24px' });
+  scroller.appendChild(wrap);
+  return scroller;
+}
+
+// ── Run Detail Page ──────────────────────────────────────────
+async function renderRunDetail(runId) {
+  const app = $('#app');
+  app.innerHTML = '<div class="loading"><span class="pulse">Loading run ' + runId + '...</span></div>';
+
+  let run;
+  try { run = await api('/api/runs/' + runId); } catch (e) {
+    app.innerHTML = '';
+    app.appendChild(el('div', { class: 'empty-state' }, el('h2', null, 'Error'), el('p', null, e.message)));
+    return;
+  }
+
+  app.innerHTML = '';
+
+  const config = run.config || {};
+  const optConfig = config.optimizer_config || {};
+  const baseline = run.baseline;
+  const iterations = run.iterations || [];
+  const result = run.result;
+  const checkpoint = run.checkpoint;
+  const logEntries = run.log || [];
+  const durationSec = run.duration_seconds;
+  const startedAt = run.started_at;
+
+  const baselineScore = baseline ? baseline.mean_score : null;
+  const bestScore = checkpoint ? checkpoint.best_score : (result ? result.best_score : null);
+  const finalScore = result && result.final ? result.final.mean_score : null;
+  const improvement = (baselineScore != null && bestScore != null) ? bestScore - baselineScore : null;
+  const improvPct = (improvement != null && baselineScore > 0) ? (improvement / baselineScore * 100) : null;
+
+  const status = run.is_complete ? 'completed' : (checkpoint ? 'interrupted' : 'running');
+
+  // Back button
+  app.appendChild(el('button', { class: 'back-btn', onClick: () => { location.hash = '/'; } }, '\u2190 All runs'));
+
+  // Title
+  const titleRow = el('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' } },
+    el('h1', { style: { fontSize: '22px', fontWeight: '700' } }, 'Run ', el('span', { style: { color: 'var(--accent-bright)' } }, runId)),
+    badge(status)
+  );
+  app.appendChild(titleRow);
+
+  // Stats
+  const statsRow = el('div', { class: 'stats-row' });
+  const mkStat = (label, value, cls, extra) => {
+    const box = el('div', { class: 'stat-box' },
+      el('div', { class: 'stat-label' }, label),
+      el('div', { class: 'stat-value' + (cls ? ' ' + cls : '') }, value)
+    );
+    if (extra) box.appendChild(extra);
+    return box;
+  };
+  const fmtDuration = (s) => {
+    if (s == null) return '--';
+    if (s < 60) return s.toFixed(1) + 's';
+    const m = Math.floor(s / 60), sec = Math.round(s % 60);
+    return m + 'm ' + String(sec).padStart(2, '0') + 's';
+  };
+
+  statsRow.appendChild(mkStat('Baseline', fmtScore(baselineScore)));
+  statsRow.appendChild(mkStat('Best Score', fmtScore(bestScore), 'green',
+    improvement > 0 ? el('div', { class: 'improvement' }, '+' + improvement.toFixed(4) + ' (' + (improvPct||0).toFixed(1) + '%)') : null
+  ));
+  // Only show Final if it differs from Best (verification eval divergence)
+  if (finalScore != null && bestScore != null && Math.abs(finalScore - bestScore) > 0.0001) {
+    statsRow.appendChild(mkStat('Verified', fmtScore(finalScore)));
+  }
+  statsRow.appendChild(mkStat('Iterations', String(iterations.length), 'accent'));
+  statsRow.appendChild(mkStat('Strategy', optConfig.strategy || '--', null));
+  if (durationSec != null) statsRow.appendChild(mkStat('Duration', fmtDuration(durationSec)));
+
+  // Token usage stats (shown when result has token counts)
+  const fmtTok = (n) => {
+    if (!n) return '0';
+    if (n < 1000) return String(n);
+    if (n < 1000000) { const v = n/1000; return (v === Math.floor(v) ? v : v.toFixed(1)) + 'K'; }
+    const v = n/1000000; return (v === Math.floor(v) ? v : v.toFixed(2)) + 'M';
+  };
+  const totalEvalTok = (result && result.total_eval_tokens) || 0;
+  const totalReasonTok = (result && result.total_reasoning_tokens) || 0;
+  // Also sum from per-iteration records as fallback (for older runs where result lacks top-level totals)
+  const iterEvalTok = iterations.reduce((s, it) => s + (it.eval_tokens || 0), 0);
+  const iterReasonTok = iterations.reduce((s, it) => s + (it.reasoning_tokens || 0), 0);
+  const evalTok = totalEvalTok || iterEvalTok;
+  const reasonTok = totalReasonTok || iterReasonTok;
+  if (evalTok || reasonTok) {
+    statsRow.appendChild(mkStat('Eval Tokens', fmtTok(evalTok), null));
+    statsRow.appendChild(mkStat('Reason Tokens', fmtTok(reasonTok), null));
+  }
+
+  app.appendChild(statsRow);
+
+  // Run log panel (collapsed by default; expand to show raw event timeline)
+  if (logEntries.length > 0) {
+    const logToggleBtn = el('button', {
+      type: 'button',
+      style: { background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)',
+               fontSize: '13px', fontFamily: 'var(--sans)', padding: '0', marginBottom: '6px' }
+    }, '▶ Run Log (' + logEntries.length + ' events)');
+    const logBody = el('div', { style: { display: 'none' } });
+    const logEl = el('div', { class: 'live-log', style: { maxHeight: '240px' } });
+    const EVENT_COLORS = { queued: '#6b8aff', iteration: '#4ade80', complete: '#4ade80', error: '#f87171', cancelled: '#f97316' };
+    logEntries.forEach(entry => {
+      const color = EVENT_COLORS[entry.type] || 'var(--text-2)';
+      const ts = entry.ts ? new Date(entry.ts).toLocaleTimeString() : '';
+      const msg = entry.message || (entry.type === 'iteration'
+        ? 'Iteration ' + entry.iteration + ' — score ' + (entry.score != null ? entry.score.toFixed(4) : '?')
+        : entry.type);
+      const line = el('div', { style: { marginBottom: '2px' } },
+        el('span', { style: { color: 'var(--text-2)', marginRight: '8px', fontSize: '11px' } }, ts),
+        el('span', { style: { color, fontWeight: '600', marginRight: '6px' } }, '[' + entry.type + ']'),
+        el('span', null, msg)
+      );
+      logEl.appendChild(line);
+    });
+    logBody.appendChild(logEl);
+    logToggleBtn.addEventListener('click', () => {
+      const open = logBody.style.display !== 'none';
+      logBody.style.display = open ? 'none' : '';
+      logToggleBtn.textContent = (open ? '▶' : '▼') + ' Run Log (' + logEntries.length + ' events)';
+    });
+    app.appendChild(el('div', { style: { marginBottom: '20px' } }, logToggleBtn, logBody));
+  }
+
+  // Two columns: flow graph left, detail right
+  const twoCols = el('div', { class: 'two-col' });
+  const leftCol = el('div');
+  const rightCol = el('div');
+
+  function showIterDetail(it) {
+    rightCol.innerHTML = '';
+    if (!it) {
+      rightCol.appendChild(el('div', { class: 'muted', style: { padding: '20px', fontSize: '13px' } }, 'Select an iteration'));
+      return;
+    }
+    const idx = iterations.findIndex(x => x.iteration === it.iteration);
+
+    // Prompt section
+    const promptSection = el('div', { class: 'section' },
+      el('div', { class: 'section-title' }, 'Prompt — Iteration #' + it.iteration)
+    );
+    const tabs = el('div', { class: 'prompt-tabs' });
+    const promptArea = el('div');
+
+    function showPrompt(tab) {
+      promptArea.innerHTML = '';
+      $$('.prompt-tab', tabs).forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      if (tab === 'current') {
+        promptArea.appendChild(el('div', { class: 'prompt-text' }, it.system_prompt || '(empty)'));
+      } else if (tab === 'initial') {
+        promptArea.appendChild(el('div', { class: 'prompt-text' }, config.initial_prompt || '(empty)'));
+      } else if (tab === 'diff') {
+        const prevPrompt = idx === 0 ? (config.initial_prompt || '') : (iterations[idx - 1].system_prompt || '');
+        const diff = computeDiff(prevPrompt, it.system_prompt || '');
+        const pre = el('div', { class: 'prompt-text' });
+        diff.forEach(op => {
+          const cls = op.t === '+' ? 'diff-line diff-add' : op.t === '-' ? 'diff-line diff-del' : 'diff-line';
+          pre.appendChild(el('span', { class: cls }, (op.t === '+' ? '+ ' : op.t === '-' ? '- ' : '  ') + op.s + '\n'));
+        });
+        promptArea.appendChild(pre);
+      }
+    }
+    ['current', 'diff', 'initial'].forEach(t => {
+      const btn = el('button', { class: 'prompt-tab' + (t === 'current' ? ' active' : ''), onClick: () => showPrompt(t) },
+        t.charAt(0).toUpperCase() + t.slice(1));
+      btn.dataset.tab = t;
+      tabs.appendChild(btn);
+    });
+    promptSection.appendChild(tabs);
+    promptSection.appendChild(promptArea);
+    showPrompt('current');
+    rightCol.appendChild(promptSection);
+
+    // Reasoning — strip phase prefix for display
+    if (it.reasoning) {
+      const cleanReasoning = it.reasoning.replace(/^\[\w+\]\s*/, '');
+      rightCol.appendChild(el('div', { class: 'section' },
+        el('div', { class: 'section-title' }, 'Reasoning'),
+        el('div', { class: 'reasoning-text' }, cleanReasoning)
+      ));
+    }
+
+    // Config
+    const configGrid = el('div', { class: 'config-grid' });
+    const addCfg = (k, v) => {
+      configGrid.appendChild(el('span', { class: 'config-key' }, k));
+      configGrid.appendChild(el('span', { class: 'config-val' }, String(v != null ? v : '--')));
+    };
+    addCfg('strategy', optConfig.strategy);
+    addCfg('reasoning_model', optConfig.reasoning_model);
+    addCfg('max_iterations', optConfig.max_iterations);
+    addCfg('score_threshold', optConfig.score_threshold);
+    addCfg('max_workers', optConfig.max_workers);
+    addCfg('dataset', config.dataset_path);
+    rightCol.appendChild(el('div', { class: 'section' },
+      el('div', { class: 'section-title' }, 'Configuration'),
+      el('div', { class: 'card', style: { marginBottom: '0' } }, configGrid)
+    ));
+  }
+
+  // Branch modal
+  function openBranchModal(it) {
+    const overlay = el('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100;display:flex;align-items:center;justify-content:center' });
+
+    const modal = el('div', { style: 'background:var(--surface-1);border:1px solid var(--border);border-radius:12px;padding:28px 32px;width:380px;box-shadow:0 8px 32px rgba(0,0,0,0.5)' });
+
+    modal.appendChild(el('div', { style: 'font-size:16px;font-weight:700;margin-bottom:4px' }, 'Branch from iteration ' + it.iteration));
+    modal.appendChild(el('div', { style: 'font-size:12px;color:var(--text-2);margin-bottom:20px' },
+      'Starts a new run from this prompt (score ' + fmtScore(it.score) + '), reusing the parent baseline.'
+    ));
+
+    // Strategy selector
+    const strategyLabel = el('div', { style: 'font-size:12px;color:var(--text-2);margin-bottom:6px' }, 'Strategy');
+    const strategySelect = el('select', { class: 'form-input', style: 'width:100%;margin-bottom:16px' });
+    ['iterative', 'fewshot', 'structural', 'pdo', 'auto'].forEach(s => {
+      const opt = el('option', { value: s }, s);
+      if (s === 'iterative') opt.selected = true;
+      strategySelect.appendChild(opt);
+    });
+    modal.appendChild(strategyLabel);
+    modal.appendChild(strategySelect);
+
+    // Max iterations
+    const itersLabel = el('div', { style: 'font-size:12px;color:var(--text-2);margin-bottom:6px' }, 'Max iterations');
+    const itersInput = el('input', { class: 'form-input', type: 'number', min: '1', max: '50', value: '10', style: 'width:100%;margin-bottom:24px' });
+    modal.appendChild(itersLabel);
+    modal.appendChild(itersInput);
+
+    // Buttons
+    const btnRow = el('div', { style: 'display:flex;gap:10px;justify-content:flex-end' });
+    const cancelBtn = el('button', { class: 'btn', style: 'min-width:80px' }, 'Cancel');
+    const startBtn = el('button', { class: 'btn btn-primary', style: 'min-width:120px' }, '⎇ Start Branch');
+
+    cancelBtn.addEventListener('click', () => document.body.removeChild(overlay));
+    startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      startBtn.textContent = 'Starting…';
+      try {
+        const resp = await api('/api/jobs/branch', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            parent_run_id: runId,
+            parent_iteration: it.iteration,
+            strategy: strategySelect.value,
+            max_iterations: parseInt(itersInput.value, 10) || 10,
+          }),
+        });
+        document.body.removeChild(overlay);
+        location.hash = '/jobs/' + resp.job_id;
+      } catch (e) {
+        startBtn.disabled = false;
+        startBtn.textContent = '⎇ Start Branch';
+        modal.appendChild(el('div', { style: 'color:#f87171;font-size:12px;margin-top:10px' }, 'Error: ' + e.message));
+      }
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(startBtn);
+    modal.appendChild(btnRow);
+    overlay.appendChild(modal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) document.body.removeChild(overlay); });
+    document.body.appendChild(overlay);
+  }
+
+  // Build + mount flow graph
+  if (iterations.length === 0) {
+    leftCol.appendChild(el('div', { class: 'muted', style: { fontSize: '13px' } }, 'No iterations yet'));
+  } else {
+    leftCol.appendChild(buildFlowGraph(iterations, baselineScore, bestScore, optConfig, showIterDetail, openBranchModal));
+  }
+
+  twoCols.appendChild(leftCol);
+  twoCols.appendChild(rightCol);
+  app.appendChild(twoCols);
+
+  // Show last iteration detail by default
+  if (iterations.length > 0) showIterDetail(iterations[iterations.length - 1]);
+}
+
+// ── New Run Form ─────────────────────────────────────────────
+function renderNewRun() {
+  const app = $('#app');
+  app.innerHTML = '';
+
+  const wrap = el('div', { class: 'form-wrap' });
+
+  wrap.appendChild(el('button', { class: 'back-btn', onClick: () => { location.hash = '/'; } }, '← Back to Runs'));
+  wrap.appendChild(el('div', { class: 'card-title', style: { marginBottom: '20px', fontSize: '16px' } }, 'New Optimization Run'));
+
+  // ── Prompt ──────────────────────────────────────────
+  const promptTA = el('textarea', { class: 'form-textarea', placeholder: 'You are a helpful assistant that summarizes text clearly and concisely.' });
+  wrap.appendChild(el('div', { class: 'form-group' },
+    el('label', { class: 'form-label' }, 'Initial Prompt'),
+    promptTA,
+    el('div', { class: 'form-hint' }, 'Paste your starting system prompt. Reflex will optimize it against your dataset.')
+  ));
+
+  // ── Dataset path ──────────────────────────────────────────
+  const datasetInput = el('input', { class: 'form-input', type: 'text', placeholder: '/path/to/data.jsonl' });
+  wrap.appendChild(el('div', { class: 'form-group' },
+    el('label', { class: 'form-label' }, 'Dataset', el('span', null, 'absolute or relative path to a .jsonl file')),
+    datasetInput,
+    el('div', { class: 'form-hint' }, 'Supports OpenAI, ShareGPT, and Alpaca formats — auto-detected. Each line is one example.')
+  ));
+
+  // ── Model + Metric row ────────────────────────────────────
+  const MODEL_KEY_INFO = {
+    openai:      { env: 'OPENAI_API_KEY',      install: null },
+    anthropic:   { env: 'ANTHROPIC_API_KEY',   install: null },
+    google:      { env: 'GOOGLE_API_KEY',       install: 'pip install aevyra-reflex[google]' },
+    mistral:     { env: 'MISTRAL_API_KEY',      install: 'pip install aevyra-reflex[mistral]' },
+    cohere:      { env: 'COHERE_API_KEY',       install: 'pip install aevyra-reflex[cohere]' },
+    openrouter:  { env: 'OPENROUTER_API_KEY',   install: 'pip install aevyra-reflex[openai]' },
+    together:    { env: 'TOGETHER_API_KEY',      install: 'pip install aevyra-reflex[openai]' },
+    fireworks:   { env: 'FIREWORKS_API_KEY',    install: 'pip install aevyra-reflex[openai]' },
+    groq:        { env: 'GROQ_API_KEY',         install: 'pip install aevyra-reflex[openai]' },
+    ollama:      { env: null,                    install: null },
+    local:       { env: null,                    install: null },
+  };
+
+  const modelHint = el('div', { class: 'form-hint' },
+    'e.g. ', el('code', null, 'openai/gpt-4o-mini'), ', ',
+    el('code', null, 'ollama/llama3:8b'), ', ',
+    el('code', null, 'anthropic/claude-haiku-4-5-20251001')
+  );
+  const modelKeyHint = el('div', { class: 'form-hint', style: { marginTop: '6px', display: 'none' } });
+
+  const modelInput = el('input', { class: 'form-input', type: 'text', placeholder: 'openai/gpt-4o-mini' });
+  modelInput.addEventListener('input', () => {
+    const provider = modelInput.value.split('/')[0].toLowerCase().trim();
+    const info = MODEL_KEY_INFO[provider];
+    modelKeyHint.innerHTML = '';
+    modelKeyHint.style.display = 'none';
+    if (!provider) return;
+    if (info) {
+      const parts = [];
+      if (info.env) {
+        const envSpan = document.createElement('span');
+        envSpan.innerHTML = `Set <code style="font-family:var(--mono);background:var(--bg-3);padding:1px 5px;border-radius:3px">${info.env}</code> in your environment`;
+        parts.push(envSpan);
+      } else {
+        const noKey = document.createElement('span');
+        noKey.textContent = 'No API key needed';
+        noKey.style.color = 'var(--green)';
+        parts.push(noKey);
+      }
+      if (info.install) {
+        const sep = document.createElement('span');
+        sep.textContent = '  ·  ';
+        sep.style.color = 'var(--text-2)';
+        const installSpan = document.createElement('span');
+        installSpan.innerHTML = `Install: <code style="font-family:var(--mono);background:var(--bg-3);padding:1px 5px;border-radius:3px">${info.install}</code>`;
+        parts.push(sep, installSpan);
+      }
+      parts.forEach(p => modelKeyHint.appendChild(p));
+      modelKeyHint.style.display = 'block';
+    } else if (provider.length > 1) {
+      // Unknown provider — give a generic hint
+      modelKeyHint.textContent = `Unknown provider "${provider}". Use a known provider or an OpenAI-compatible base URL.`;
+      modelKeyHint.style.color = 'var(--yellow)';
+      modelKeyHint.style.display = 'block';
+    }
+  });
+
+  const metricSel = el('select', { class: 'form-select' },
+    el('option', { value: 'rouge' }, 'ROUGE (default)'),
+    el('option', { value: 'bleu' }, 'BLEU'),
+    el('option', { value: 'exact' }, 'Exact Match'),
+    el('option', { value: 'judge' }, 'LLM Judge')
+  );
+  const judgeInput = el('input', { class: 'form-input', type: 'text', placeholder: 'openai/gpt-4o-mini', style: { display: 'none', marginTop: '8px' } });
+  const judgeHint  = el('div', { class: 'form-hint', style: { display: 'none' } }, 'Judge model in provider/model format.');
+
+  // Judge scoring mode toggle: single score vs per-dimension
+  let judgeScoringMode = 'single'; // 'single' | 'dimensions'
+  const judgeTabSingle = el('button', { class: 'prompt-tab active', type: 'button' }, 'Single score');
+  const judgeTabDims   = el('button', { class: 'prompt-tab',        type: 'button' }, 'Per dimension');
+
+  // Single score — criteria freetext
+  const judgeCriteriaWrap = el('div');
+  const judgeCriteria = el('textarea', { class: 'form-textarea', style: { minHeight: '80px', marginTop: '6px' },
+    placeholder: '- Accuracy: Is the response factually correct?\n- Helpfulness: Does it address the question?\n- Clarity: Is it well-written and easy to understand?'
+  });
+  judgeCriteriaWrap.appendChild(judgeCriteria);
+  judgeCriteriaWrap.appendChild(el('div', { class: 'form-hint', style: { marginTop: '5px' } }, 'Leave blank to use defaults. Judge returns one aggregate score (1–5).'));
+
+  // Per-dimension — list of dimension names
+  const judgeDimsWrap  = el('div', { style: { display: 'none' } });
+  const judgeDimsInput = el('input', { class: 'form-input', type: 'text', placeholder: 'accuracy, helpfulness, tone, completeness' });
+  judgeDimsWrap.appendChild(judgeDimsInput);
+  judgeDimsWrap.appendChild(el('div', { class: 'form-hint', style: { marginTop: '5px' } },
+    'Comma-separated dimension names. Judge scores each independently in one call — all tracked separately in the run dashboard.'
+  ));
+
+  let prevThreshMode = 'manual'; // remember thresh mode before dims forced it to auto
+  judgeTabSingle.addEventListener('click', () => {
+    judgeScoringMode = 'single';
+    judgeTabSingle.classList.add('active'); judgeTabDims.classList.remove('active');
+    judgeCriteriaWrap.style.display = ''; judgeDimsWrap.style.display = 'none';
+    // Restore the previous thresh mode when leaving dimensions
+    if (typeof switchThreshTab === 'function') switchThreshTab(prevThreshMode);
+  });
+  judgeTabDims.addEventListener('click', () => {
+    judgeScoringMode = 'dimensions';
+    judgeTabDims.classList.add('active'); judgeTabSingle.classList.remove('active');
+    judgeDimsWrap.style.display = ''; judgeCriteriaWrap.style.display = 'none';
+    // Auto-switch threshold to Auto — manual threshold is meaningless across dimensions
+    if (typeof switchThreshTab === 'function') {
+      prevThreshMode = threshMode;
+      switchThreshTab('auto', { lockedToAuto: true });
+    }
+  });
+
+  const judgeScoringSection = el('div', { style: { display: 'none', marginTop: '10px' } },
+    el('div', { class: 'form-label', style: { marginBottom: '6px' } }, 'Scoring mode'),
+    el('div', { class: 'prompt-tabs', style: { marginBottom: '8px' } }, judgeTabSingle, judgeTabDims),
+    judgeCriteriaWrap,
+    judgeDimsWrap
+  );
+
+  const judgeCriteriaLabel = el('span'); // kept for compat, unused
+  const judgeCriteriaHint  = el('span'); // kept for compat, unused
+
+  metricSel.addEventListener('change', () => {
+    const isJudge = metricSel.value === 'judge';
+    [judgeInput, judgeHint, judgeScoringSection].forEach(e => {
+      e.style.display = isJudge ? '' : 'none';
+    });
+    // When switching away from judge while per-dimension mode was active,
+    // reset scoring mode and unlock the threshold tabs
+    if (!isJudge && judgeScoringMode === 'dimensions') {
+      judgeScoringMode = 'single';
+      judgeTabSingle.classList.add('active'); judgeTabDims.classList.remove('active');
+      judgeCriteriaWrap.style.display = ''; judgeDimsWrap.style.display = 'none';
+      if (typeof switchThreshTab === 'function') switchThreshTab(prevThreshMode);
+    }
+  });
+  wrap.appendChild(el('div', { class: 'form-row' },
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Target Model', el('span', null, 'provider/model')),
+      modelInput,
+      modelHint,
+      modelKeyHint
+    ),
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Metric'),
+      metricSel,
+      judgeInput,
+      judgeHint,
+      judgeScoringSection
+    )
+  ));
+
+  // ── Strategy + Iterations + Threshold row ─────────────────
+  const strategySel = el('select', { class: 'form-select' },
+    el('option', { value: 'auto' }, 'Auto (recommended)'),
+    el('option', { value: 'iterative' }, 'Iterative'),
+    el('option', { value: 'pdo' }, 'PDO (population dueling)'),
+    el('option', { value: 'fewshot' }, 'Few-shot'),
+    el('option', { value: 'structural' }, 'Structural')
+  );
+  const itersInput = el('input', { class: 'form-input', type: 'number', value: '10', min: '3', max: '50' });
+
+  // ── Threshold toggle ──────────────────────────────────────
+  let threshMode = 'auto'; // 'manual' | 'verdict' | 'auto'
+
+  // Manual
+  const threshManualInput = el('input', { class: 'form-input', type: 'number', value: '0.85', min: '0', max: '1', step: '0.01', style: { display: 'none' } });
+  const threshManualHint  = el('div', { class: 'form-hint', style: { display: 'none' } }, 'Stop early when score reaches this value.');
+
+  // From verdict file
+  const threshVerdictInput = el('input', { class: 'form-input', type: 'text', placeholder: '/path/to/verdict/results.json', style: { display: 'none' } });
+  const threshVerdictHint  = el('div', { class: 'form-hint', style: { display: 'none' } }, 'Threshold set to the best model score in this verdict results file.');
+
+  // Auto — run verdict live to benchmark target models
+  const threshAutoWrap  = el('div', { style: { display: 'none' } });
+  const threshAutoInput = el('input', { class: 'form-input', type: 'text',
+    placeholder: 'openai/gpt-4o-mini, anthropic/claude-haiku-4-5-20251001' });
+  threshAutoWrap.appendChild(threshAutoInput);
+  threshAutoWrap.appendChild(el('div', { class: 'form-hint', style: { marginTop: '6px' } },
+    'Comma-separated list of models to benchmark (e.g. openai/gpt-4o-mini, anthropic/claude-3-haiku). ' +
+    'Reflex scores each on your dataset and uses the best score as the target threshold.'
+  ));
+
+  const tabManual  = el('button', { class: 'prompt-tab',        type: 'button' }, 'Manual');
+  const tabVerdict = el('button', { class: 'prompt-tab',        type: 'button' }, 'From verdict');
+  const tabAuto    = el('button', { class: 'prompt-tab active', type: 'button' }, 'Auto');
+
+  const allThreshTabs = [tabManual, tabVerdict, tabAuto];
+  function switchThreshTab(mode, { lockedToAuto = false } = {}) {
+    threshMode = mode;
+    allThreshTabs.forEach(t => {
+      t.classList.remove('active');
+      t.disabled = lockedToAuto && t !== tabAuto;
+      t.style.opacity = (lockedToAuto && t !== tabAuto) ? '0.35' : '';
+      t.style.cursor  = (lockedToAuto && t !== tabAuto) ? 'not-allowed' : '';
+    });
+    ({ manual: tabManual, verdict: tabVerdict, auto: tabAuto })[mode].classList.add('active');
+    threshManualInput.style.display  = mode === 'manual'  ? '' : 'none';
+    threshManualHint.style.display   = mode === 'manual'  ? '' : 'none';
+    threshVerdictInput.style.display = mode === 'verdict' ? '' : 'none';
+    threshVerdictHint.style.display  = mode === 'verdict' ? '' : 'none';
+    threshAutoWrap.style.display     = mode === 'auto'    ? '' : 'none';
+    if (mode === 'auto' && lockedToAuto) {
+      // Add a small note explaining why it's locked
+      let note = threshGroup.querySelector('.thresh-locked-note');
+      if (!note) {
+        note = el('div', { class: 'form-hint thresh-locked-note', style: { marginTop: '6px', color: 'var(--yellow)' } },
+          '⚠ Required when using per-dimension scoring — benchmark a reference model to get a meaningful composite target.'
+        );
+        threshGroup.appendChild(note);
+      }
+      note.style.display = '';
+    } else {
+      const note = threshGroup.querySelector('.thresh-locked-note');
+      if (note) note.style.display = 'none';
+    }
+  }
+  tabManual.addEventListener('click',  () => { if (!tabManual.disabled)  switchThreshTab('manual'); });
+  tabVerdict.addEventListener('click', () => { if (!tabVerdict.disabled) switchThreshTab('verdict'); });
+  tabAuto.addEventListener('click',    () => switchThreshTab('auto'));
+
+  const threshGroup = el('div', { class: 'form-group', style: { marginBottom: '0' } },
+    el('label', { class: 'form-label' }, 'Score Threshold'),
+    el('div', { class: 'prompt-tabs', style: { marginBottom: '8px' } }, tabManual, tabVerdict, tabAuto),
+    threshManualInput, threshManualHint,
+    threshVerdictInput, threshVerdictHint,
+    threshAutoWrap
+  );
+
+  wrap.appendChild(el('div', { style: { marginTop: '16px' } },
+    el('div', { class: 'form-row' },
+      el('div', { class: 'form-group', style: { marginBottom: '0' } },
+        el('label', { class: 'form-label' }, 'Strategy'),
+        strategySel
+      ),
+      el('div', { class: 'form-group', style: { marginBottom: '0' } },
+        el('label', { class: 'form-label' }, 'Max Iterations'),
+        itersInput
+      )
+    ),
+    el('div', { class: 'form-row', style: { marginTop: '16px' } },
+      threshGroup,
+      el('div', { class: 'form-group', style: { marginBottom: '0' } },
+        el('label', { class: 'form-label' }, 'Reasoning Model', el('span', null, 'optional — defaults to Claude')),
+        el('input', { class: 'form-input', type: 'text', placeholder: 'claude-sonnet-4-20250514', id: 'reasoning-model-input',
+          onInput: (e) => {
+            const v = e.target.value.trim();
+            let hint = e.target.nextSibling;
+            if (!hint || !hint.classList.contains('form-hint')) {
+              hint = el('div', { class: 'form-hint', style: { marginTop: '5px' } });
+              e.target.insertAdjacentElement('afterend', hint);
+            }
+            hint.innerHTML = '';
+            hint.style.display = 'none';
+            if (!v) {
+              hint.innerHTML = 'Defaults to Claude (<code style="font-family:var(--mono);background:var(--bg-3);padding:1px 5px;border-radius:3px">ANTHROPIC_API_KEY</code>)';
+              hint.style.display = 'block';
+              return;
+            }
+            const provider = v.includes('/') ? v.split('/')[0].toLowerCase() : (v.startsWith('claude') ? 'anthropic' : v.startsWith('gpt') || v.startsWith('o1') || v.startsWith('o3') ? 'openai' : null);
+            const info = provider ? MODEL_KEY_INFO[provider] : null;
+            if (info && info.env) {
+              hint.innerHTML = `Set <code style="font-family:var(--mono);background:var(--bg-3);padding:1px 5px;border-radius:3px">${info.env}</code> in your environment`;
+              hint.style.display = 'block';
+            } else if (info && !info.env) {
+              hint.textContent = 'No API key needed';
+              hint.style.color = 'var(--green)';
+              hint.style.display = 'block';
+            }
+          }
+        })
+      )
+    )
+  ));
+
+  // ── Error box ─────────────────────────────────────────────
+  const errBox = el('div', { style: { display: 'none', marginTop: '14px', padding: '10px 14px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', borderRadius: '7px', color: 'var(--red)', fontSize: '13px' } });
+
+  // ── Submit ────────────────────────────────────────────────
+  const runBtn = el('button', { class: 'btn btn-primary', style: { marginTop: '22px' } }, '▶ Start Optimization');
+  runBtn.addEventListener('click', async () => {
+    const prompt = promptTA.value.trim();
+    const datasetPath = datasetInput.value.trim();
+    const model = modelInput.value.trim();
+
+    errBox.style.display = 'none';
+    if (!prompt) { errBox.textContent = 'Prompt is required.'; errBox.style.display = 'block'; return; }
+    if (!datasetPath) { errBox.textContent = 'Dataset path is required.'; errBox.style.display = 'block'; return; }
+    if (!model) { errBox.textContent = 'Model is required (e.g. openai/gpt-4o-mini).'; errBox.style.display = 'block'; return; }
+    if (!model.includes('/')) { errBox.textContent = 'Model must be in provider/model format, e.g. openai/gpt-4o-mini.'; errBox.style.display = 'block'; return; }
+    if (threshMode === 'verdict' && !threshVerdictInput.value.trim()) { errBox.textContent = 'Verdict results path is required when using "From verdict" threshold.'; errBox.style.display = 'block'; return; }
+    if (threshMode === 'auto' && !threshAutoInput.value.trim()) { errBox.textContent = 'At least one target model is required for Auto threshold.'; errBox.style.display = 'block'; return; }
+    if (threshMode === 'auto' && threshAutoInput.value.split(',').map(s => s.trim()).filter(Boolean).some(m => !m.includes('/'))) { errBox.textContent = 'Each target model must be in provider/model format (e.g. openai/gpt-4o-mini).'; errBox.style.display = 'block'; return; }
+    if (metricSel.value === 'judge' && !judgeInput.value.trim()) { errBox.textContent = 'Judge model is required when using LLM Judge (e.g. openai/gpt-4o-mini).'; errBox.style.display = 'block'; return; }
+    if (metricSel.value === 'judge' && !judgeInput.value.trim().includes('/')) { errBox.textContent = 'Judge model must be in provider/model format.'; errBox.style.display = 'block'; return; }
+
+    runBtn.disabled = true;
+    runBtn.textContent = 'Starting…';
+
+    try {
+      const body = {
+        prompt,
+        dataset_path: datasetPath,
+        model,
+        metrics: metricSel.value === 'judge' ? [] : [metricSel.value],
+        judge: metricSel.value === 'judge' ? judgeInput.value.trim() : '',
+        judge_criteria: (metricSel.value === 'judge' && judgeScoringMode === 'single') ? judgeCriteria.value.trim() : '',
+        judge_dimensions: (metricSel.value === 'judge' && judgeScoringMode === 'dimensions')
+          ? judgeDimsInput.value.split(',').map(s => s.trim()).filter(Boolean)
+          : [],
+        strategy: strategySel.value,
+        max_iterations: parseInt(itersInput.value, 10) || 10,
+        score_threshold: threshMode === 'manual' ? (parseFloat(threshManualInput.value) || 0.85) : 0.85,
+        verdict_results_path: threshMode === 'verdict' ? threshVerdictInput.value.trim() : '',
+        target_models: threshMode === 'auto' ? threshAutoInput.value.split(',').map(s => s.trim()).filter(Boolean) : [],
+        reasoning_model: ($('#reasoning-model-input') || {}).value || '',
+      };
+      const resp = await fetch('/api/jobs/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Failed to start job');
+      location.hash = '/jobs/' + data.job_id;
+    } catch (e) {
+      errBox.textContent = e.message;
+      errBox.style.display = 'block';
+      runBtn.disabled = false;
+      runBtn.textContent = '▶ Start Optimization';
+    }
+  });
+
+  wrap.appendChild(errBox);
+  wrap.appendChild(runBtn);
+  app.appendChild(wrap);
+}
+
+// ── Live Run Progress ────────────────────────────────────────
+function renderLiveRun(jobId) {
+  const app = $('#app');
+  app.innerHTML = '';
+
+  const scores = [];
+  let status = 'starting';
+  let completedRunId = null;
+  let es = null;
+
+  // ── Header ───────────────────────────────────────────────
+  const statusBadge = el('span', { class: 'badge badge-running' }, '… running');
+  const cancelBtn = el('button', { class: 'btn btn-danger', style: { marginLeft: 'auto' } }, '✕ Cancel');
+  const header = el('div', { class: 'live-header' },
+    el('button', { class: 'back-btn', style: { marginBottom: '0' }, onClick: () => {
+      if (es) es.close();
+      location.hash = '/';
+    }}, '← Runs'),
+    el('span', { style: { fontSize: '14px', fontWeight: '600' } }, 'Optimization in progress'),
+    statusBadge,
+    cancelBtn
+  );
+  app.appendChild(header);
+
+  cancelBtn.addEventListener('click', async () => {
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = 'Cancelling…';
+    await fetch('/api/jobs/' + jobId + '/cancel', { method: 'POST' });
+    if (es) es.close();
+  });
+
+  // ── Score display ─────────────────────────────────────────
+  const scoreBig = el('div', { class: 'live-score-big' }, '--');
+  const scoreLabel = el('div', { class: 'live-score-label' }, 'Latest score');
+  const baselineEl = el('div', { style: { marginTop: '16px', fontSize: '12px', color: 'var(--text-2)' } }, 'Baseline: —');
+  const iterTrack = el('div', { class: 'live-iter-track' });
+  const rightPanel = el('div', { class: 'card' },
+    el('div', { class: 'section-title' }, 'Score'),
+    scoreBig, scoreLabel, baselineEl,
+    el('div', { style: { marginTop: '20px' } },
+      el('div', { class: 'section-title' }, 'Iterations'),
+      iterTrack
+    )
+  );
+
+  // ── Log ───────────────────────────────────────────────────
+  const logEl = el('div', { class: 'live-log' });
+  const addLog = (msg, cls = '') => {
+    const now = new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    logEl.appendChild(el('div', { class: 'log-line' },
+      el('span', { class: 'log-ts' }, now),
+      el('span', { class: 'log-msg' + (cls ? ' ' + cls : '') }, msg)
+    ));
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  // ── Best prompt panel ─────────────────────────────────────
+  const promptBox = el('pre', { class: 'prompt-text', style: { marginTop: '12px', display: 'none' } });
+  const promptSection = el('div', { class: 'card', style: { marginTop: '16px' } },
+    el('div', { class: 'section-title' }, 'Current best prompt'),
+    promptBox
+  );
+
+  const leftPanel = el('div', null,
+    el('div', { class: 'card' },
+      el('div', { class: 'section-title' }, 'Log'),
+      logEl
+    ),
+    promptSection
+  );
+
+  const grid = el('div', { class: 'live-grid' }, leftPanel, rightPanel);
+  app.appendChild(grid);
+
+  // ── View-run button (shown on completion) ─────────────────
+  const viewRunBtn = el('button', { class: 'btn btn-primary', style: { display: 'none', marginTop: '16px' } }, '→ View Full Run');
+  viewRunBtn.addEventListener('click', () => { location.hash = '/runs/' + completedRunId; });
+  app.appendChild(viewRunBtn);
+
+  // ── SSE connection ────────────────────────────────────────
+  addLog('Connecting…');
+  es = new EventSource('/api/jobs/' + jobId + '/stream');
+
+  let baseline = null;
+
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+
+    if (ev.type === 'queued') {
+      addLog(ev.message || 'Queued');
+
+    } else if (ev.type === 'iteration') {
+      const iter = ev.iteration;
+      const score = ev.score;
+      scores.push(score);
+
+      scoreBig.textContent = score.toFixed(4);
+      addLog(`iter ${String(iter).padStart(2, ' ')}  score: ${score.toFixed(4)}`, 'score');
+
+      // Iter bar row
+      const maxScore = Math.max(...scores, baseline || 0);
+      const pct = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+      const bar = el('div', { class: 'live-iter-bar', style: { width: pct + '%' } });
+      const row = el('div', { class: 'live-iter-row' },
+        el('span', { class: 'live-iter-num' }, iter),
+        el('div', { class: 'live-iter-bar-wrap' }, bar),
+        el('span', { class: 'live-iter-score' }, score.toFixed(4))
+      );
+      iterTrack.appendChild(row);
+
+      // Update prompt preview
+      if (ev.system_prompt) {
+        promptBox.textContent = ev.system_prompt;
+        promptBox.style.display = 'block';
+        promptSection.style.display = 'block';
+      }
+
+      // If first iter has a baseline context from queued
+      if (baseline !== null) {
+        const delta = score - baseline;
+        const deltaStr = (delta >= 0 ? '+' : '') + delta.toFixed(4);
+        baselineEl.textContent = `Baseline: ${baseline.toFixed(4)}  |  Δ best: ${deltaStr}`;
+      }
+
+    } else if (ev.type === 'complete') {
+      es.close();
+      completedRunId = ev.run_id;
+      status = 'complete';
+      statusBadge.className = 'badge badge-completed';
+      statusBadge.textContent = '✓ completed';
+      cancelBtn.style.display = 'none';
+      const imp = ev.improvement_pct != null ? ' (' + (ev.improvement_pct >= 0 ? '+' : '') + ev.improvement_pct.toFixed(1) + '%)' : '';
+      addLog(`Done — best score: ${ev.best_score != null ? ev.best_score.toFixed(4) : '--'}${imp}`, 'done');
+      if (ev.best_prompt) {
+        promptBox.textContent = ev.best_prompt;
+        promptBox.style.display = 'block';
+      }
+      if (completedRunId) viewRunBtn.style.display = 'inline-flex';
+
+    } else if (ev.type === 'cancelled') {
+      es.close();
+      status = 'cancelled';
+      statusBadge.className = 'badge badge-interrupted';
+      statusBadge.textContent = '⚡ cancelled';
+      cancelBtn.style.display = 'none';
+      addLog('Run cancelled.', 'error');
+
+    } else if (ev.type === 'error') {
+      es.close();
+      status = 'error';
+      statusBadge.className = 'badge';
+      statusBadge.style.background = 'rgba(248,113,113,0.1)';
+      statusBadge.style.color = 'var(--red)';
+      statusBadge.textContent = '✕ error';
+      cancelBtn.style.display = 'none';
+      addLog('Error: ' + ev.message, 'error');
+    }
+  };
+
+  es.onerror = () => {
+    if (status === 'complete' || status === 'cancelled' || status === 'error') return;
+    addLog('Connection lost. The run may still be in progress — check the Runs list.', 'error');
+    statusBadge.className = 'badge badge-interrupted';
+    statusBadge.textContent = '⚡ disconnected';
+    es.close();
+  };
+}
+
+// ── Route + Render ───────────────────────────────────────────
+function getRoute() {
+  const h = location.hash.replace(/^#/, '') || '/';
+  const mRun = h.match(/^\/runs\/(\w+)/);
+  if (mRun) return { page: 'run', id: mRun[1] };
+  const mJob = h.match(/^\/jobs\/(\w+)/);
+  if (mJob) return { page: 'job', id: mJob[1] };
+  if (h === '/new') return { page: 'new' };
+  return { page: 'list' };
+}
+
+function render() {
+  const route = getRoute();
+  const navRuns = $('#nav-runs');
+  if (navRuns) navRuns.className = route.page === 'list' ? 'active' : '';
+
+  if (route.page === 'run') renderRunDetail(route.id);
+  else if (route.page === 'new') renderNewRun();
+  else if (route.page === 'job') renderLiveRun(route.id);
+  else renderRunsList();
+}
+
+window.addEventListener('hashchange', render);
+render();
+</script>
+</body>
+</html>
