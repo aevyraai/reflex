@@ -1,7 +1,6 @@
 """Tests for PromptOptimizer — provider resolution, config, Ollama detection, verdict integration."""
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -383,9 +382,6 @@ class TestOptimizerConfigTargetFields:
 
 def _make_fake_optimizer():
     """Return a PromptOptimizer wired with mock providers/metrics/dataset."""
-    from unittest.mock import MagicMock
-    from aevyra_reflex.result import EvalSnapshot, IterationRecord, OptimizationResult
-
     optimizer = PromptOptimizer(config=OptimizerConfig(max_iterations=1, score_threshold=0.9))
 
     # Fake dataset

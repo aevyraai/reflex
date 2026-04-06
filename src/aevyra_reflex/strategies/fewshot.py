@@ -26,8 +26,7 @@ prompt. Each iteration:
 from __future__ import annotations
 
 import logging
-import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from aevyra_reflex.agent import Agent
@@ -103,6 +102,7 @@ class FewShotStrategy(Strategy):
         # Phase 2: Iterative example selection and formatting
         current_instruction = initial_prompt
         current_examples: list[dict[str, str]] = []
+        failing_samples: list = []
         iterations: list[IterationRecord] = []
 
         for i in range(config.max_iterations):

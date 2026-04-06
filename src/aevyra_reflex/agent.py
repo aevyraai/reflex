@@ -136,8 +136,6 @@ class _OllamaBackend:
         self._session = None
 
     def _get_session(self):
-        if self._session is None:
-            import urllib.request
         return None  # we use urllib directly
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:

@@ -63,7 +63,6 @@ def parse_verdict_results(
 
     # Pick the metric to rank by
     rank_metric = metric or metrics[0]
-    score_key = f"{rank_metric}_mean"
 
     models_summary = data.get("models", {})
     if not models_summary:
@@ -467,7 +466,6 @@ class PromptOptimizer:
             CheckpointState,
             IterationState,
             Run,
-            RunStore,
         )
 
         run: Run | None = None

@@ -240,7 +240,7 @@ class StructuralStrategy(Strategy):
 
                 freeform_name, freeform_text = freeform_future.result()
                 variants.append((freeform_name, freeform_text))
-                logger.info(f"    Generated: agent_guided")
+                logger.info("    Generated: agent_guided")
 
             gen_elapsed = time.time() - t0
             logger.info(

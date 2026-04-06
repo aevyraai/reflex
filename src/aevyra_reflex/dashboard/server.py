@@ -29,7 +29,6 @@ import threading
 import time
 import uuid
 from dataclasses import asdict
-from functools import partial
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path

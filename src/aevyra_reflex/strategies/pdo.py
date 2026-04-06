@@ -29,10 +29,9 @@ Each round:
 from __future__ import annotations
 
 import logging
-import math
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import numpy as np

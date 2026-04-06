@@ -48,7 +48,6 @@ class IterativeStrategy(Strategy):
         config: Any,
         on_iteration: Any | None = None,
     ) -> OptimizationResult:
-        from aevyra_verdict import EvalRunner
         from aevyra_verdict.runner import RunConfig
 
         current_prompt = initial_prompt

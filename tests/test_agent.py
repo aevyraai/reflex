@@ -145,7 +145,7 @@ class TestLLMInit(unittest.TestCase):
     @patch("aevyra_reflex.agent._resolve_agent_backend")
     def test_default_uses_claude(self, mock_resolve):
         mock_resolve.return_value = MagicMock()
-        llm = LLM()
+        LLM()
         mock_resolve.assert_called_once_with(
             "claude-sonnet-4-20250514", 4096,
             provider=None, api_key=None, base_url=None,
@@ -154,7 +154,7 @@ class TestLLMInit(unittest.TestCase):
     @patch("aevyra_reflex.agent._resolve_agent_backend")
     def test_with_provider(self, mock_resolve):
         mock_resolve.return_value = MagicMock()
-        llm = LLM(model="llama3.1", provider="ollama")
+        LLM(model="llama3.1", provider="ollama")
         mock_resolve.assert_called_once_with(
             "llama3.1", 4096,
             provider="ollama", api_key=None, base_url=None,
@@ -163,7 +163,7 @@ class TestLLMInit(unittest.TestCase):
     @patch("aevyra_reflex.agent._resolve_agent_backend")
     def test_with_all_kwargs(self, mock_resolve):
         mock_resolve.return_value = MagicMock()
-        llm = LLM(
+        LLM(
             model="gpt-4o", max_tokens=8192,
             provider="openai", api_key="sk-test",
             base_url="http://my-endpoint/v1",

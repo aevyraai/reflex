@@ -4,7 +4,7 @@ import importlib
 import sys
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from aevyra_reflex.optimizer import PromptOptimizer
 

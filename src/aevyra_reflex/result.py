@@ -188,7 +188,6 @@ class OptimizationResult:
         flat_steps = n - 1 - improving_steps - declining_steps
 
         # Detect over-optimization: peak in first half and significant tail drop
-        tail_avg = sum(traj[peak_iter:]) / len(traj[peak_iter:]) if peak_iter < n else peak_score
         over_optimized = (
             peak_iter <= n // 2
             and peak_iter < n
@@ -554,7 +553,7 @@ class OptimizationResult:
             ideal_text = before.ideal
             if len(ideal_text) > 300:
                 ideal_text = ideal_text[:300] + "..."
-            lines.append(f"  Expected:")
+            lines.append("  Expected:")
             lines.append(f"    {ideal_text}")
             lines.append("")
 
@@ -562,16 +561,16 @@ class OptimizationResult:
         before_text = before.response
         if len(before_text) > 500:
             before_text = before_text[:500] + "..."
-        for l in before_text.split("\n"):
-            lines.append(f"    {l}")
+        for line in before_text.split("\n"):
+            lines.append(f"    {line}")
         lines.append("")
 
         lines.append(f"  AFTER (score: {after.score:.3f}):")
         after_text = after.response
         if len(after_text) > 500:
             after_text = after_text[:500] + "..."
-        for l in after_text.split("\n"):
-            lines.append(f"    {l}")
+        for line in after_text.split("\n"):
+            lines.append(f"    {line}")
         lines.append("")
 
         lines.append(f"  Score change: {before.score:.3f} → {after.score:.3f} ({'+' if best_delta >= 0 else ''}{best_delta:.3f})")
