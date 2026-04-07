@@ -88,6 +88,18 @@ def optimize(
         Optional[str],
         typer.Option("--reasoning-base-url", help="Base URL for the reasoning model (for self-hosted endpoints)."),
     ] = None,
+    source_model: Annotated[
+        Optional[str],
+        typer.Option(
+            "--source-model",
+            help=(
+                "The model family this prompt was originally written for "
+                "(e.g. 'claude-sonnet', 'gpt-4o', 'llama3'). "
+                "When set, the reasoning model receives migration context so it can "
+                "adapt idioms (XML tags → Markdown, role framing, etc.) for the target model."
+            ),
+        ),
+    ] = None,
     max_iterations: Annotated[
         int,
         typer.Option("--max-iterations", help="Maximum optimization iterations/rounds."),
@@ -218,6 +230,7 @@ def optimize(
         max_workers=max_workers,
         target_model=target_model_label,
         target_source=target_source,
+        source_model=source_model,
     )
     optimizer = PromptOptimizer(config=config)
     optimizer.set_dataset(ds)
@@ -285,6 +298,8 @@ def optimize(
     typer.echo(f"  Metrics    : {metric_display}")
     reasoning_display = reasoning_model or "claude-sonnet-4-20250514"
     typer.echo(f"  Reasoning  : {reasoning_display}")
+    if source_model:
+        typer.echo(f"  Source model: {source_model} (migration mode)")
     typer.echo(f"  Target     : {threshold_display}")
     typer.echo(f"  Workers    : {max_workers}")
     typer.echo("=" * 52)

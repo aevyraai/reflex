@@ -203,6 +203,12 @@ class OptimizerConfig:
     reasoning_base_url: str | None = None
     """Base URL for the reasoning model (for self-hosted or OpenAI-compatible endpoints)."""
 
+    source_model: str | None = None
+    """The model the prompt was originally written for (e.g. 'claude-sonnet', 'gpt-4o').
+    When set, the reasoning model is told which model family this prompt came from so it
+    can make smarter migration decisions — e.g. converting XML tags to markdown headers
+    when moving from Claude to GPT-4o, or adjusting system-prompt structure for Llama."""
+
     temperature: float = 1.0
     """Temperature for the agent's prompt proposals."""
 
@@ -529,6 +535,7 @@ class PromptOptimizer:
             provider=self.config.reasoning_provider,
             api_key=self.config.reasoning_api_key,
             base_url=self.config.reasoning_base_url,
+            source_model=self.config.source_model,
         )
 
         from aevyra_reflex.strategies import get_strategy
