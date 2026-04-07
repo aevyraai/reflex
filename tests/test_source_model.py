@@ -189,25 +189,19 @@ class TestOptimizerPassesSourceModel:
             best_score=0.9,
         )
 
-        try:
-            from aevyra_verdict import Dataset
-            from aevyra_verdict.dataset import Conversation, Message
-        except ImportError:
-            import unittest
-            raise unittest.SkipTest("aevyra_verdict not installed")
-
-        dataset = Dataset(conversations=[
-            Conversation(
-                messages=[Message(role="user", content="hi")],
-                ideal="hello",
-            )
-        ])
-        opt.set_dataset(dataset)
+        # Use a mock dataset so this test doesn't require aevyra_verdict
+        mock_dataset = MagicMock()
+        mock_dataset._source_path = "mock_dataset.jsonl"
+        opt._dataset = mock_dataset
         opt._providers = [{"provider_name": "mock", "model": "mock-model", "label": "mock"}]
         opt._metrics = [MagicMock()]
 
+        from aevyra_reflex.result import EvalSnapshot
+        fake_baseline = EvalSnapshot(mean_score=0.5, scores_by_metric={})
+
         with patch("aevyra_reflex.optimizer.LLM", _CaptureLLM), \
-             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock), \
+             patch.object(opt, "_run_eval", return_value=fake_baseline):
             try:
                 opt.run("Initial prompt.")
             except Exception:
