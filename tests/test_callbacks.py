@@ -5,10 +5,6 @@ W&B tests use mode="disabled" (no network, no account needed).
 No real API calls are made in any test.
 """
 
-import os
-import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -196,7 +192,7 @@ class TestMLflowCallbackLogging:
 
     def test_callback_error_does_not_propagate(self, tracking_dir, config):
         """A broken callback must not crash the optimizer."""
-        mlflow = pytest.importorskip("mlflow")
+        pytest.importorskip("mlflow")
 
         class BrokenCallback:
             def on_run_start(self, config, prompt):
@@ -207,10 +203,9 @@ class TestMLflowCallbackLogging:
                 raise RuntimeError("boom")
 
         # The optimizer swallows callback errors — simulate that here
-        from aevyra_reflex.optimizer import PromptOptimizer
         cb = BrokenCallback()
         import logging
-        with patch.object(logging.getLogger("aevyra_reflex.optimizer"), "exception") as mock_log:
+        with patch.object(logging.getLogger("aevyra_reflex.optimizer"), "exception"):
             try:
                 cb.on_run_start(config, "prompt")
             except RuntimeError:

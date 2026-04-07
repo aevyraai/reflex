@@ -1,5 +1,7 @@
 # aevyra-reflex
 
+[![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
+
 Agentic prompt optimization. Reflex reads your eval results, diagnoses why
 your model is underperforming, and rewrites the prompt until the scores
 match your target — no manual prompt engineering required.

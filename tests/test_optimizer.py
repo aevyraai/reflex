@@ -1,7 +1,6 @@
 """Tests for PromptOptimizer — provider resolution, config, Ollama detection, verdict integration."""
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -383,9 +382,6 @@ class TestOptimizerConfigTargetFields:
 
 def _make_fake_optimizer():
     """Return a PromptOptimizer wired with mock providers/metrics/dataset."""
-    from unittest.mock import MagicMock
-    from aevyra_reflex.result import EvalSnapshot, IterationRecord, OptimizationResult
-
     optimizer = PromptOptimizer(config=OptimizerConfig(max_iterations=1, score_threshold=0.9))
 
     # Fake dataset
@@ -409,10 +405,9 @@ class TestBaselineOverride(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.store = RunStore(root=Path(self.tmpdir) / ".reflex")
 
-    def _make_optimizer_with_mocked_run_eval(self, override_baseline):
-        """Return (optimizer, eval_call_count_tracker)."""
+    def _run_with_patches(self, override_baseline):
+        """Return (optimizer, call_count, strategy_mock) with LLM and get_strategy patched."""
         optimizer = _make_fake_optimizer()
-
         call_count = {"n": 0}
         fake_snap = EvalSnapshot(mean_score=0.75, scores_by_metric={"rouge": 0.75})
         fake_result = OptimizationResult(
@@ -428,48 +423,48 @@ class TestBaselineOverride(unittest.TestCase):
             call_count["n"] += 1
             return fake_snap
 
-        def fake_strategy_run(**kwargs):
-            return fake_result
-
         optimizer._run_eval = fake_run_eval
 
-        # Patch strategy so we don't need real LLM
         strategy_mock = MagicMock()
         strategy_mock.run.return_value = fake_result
-        optimizer._get_strategy = MagicMock(return_value=strategy_mock)
-
-        return optimizer, call_count
+        return optimizer, call_count, fake_snap, strategy_mock
 
     def test_baseline_override_skips_eval(self):
         override = EvalSnapshot(mean_score=0.58, scores_by_metric={"rouge": 0.58})
-        optimizer, call_count = self._make_optimizer_with_mocked_run_eval(override)
+        optimizer, call_count, _, strategy_mock = self._run_with_patches(override)
 
-        optimizer.run(
-            "You are helpful.",
-            run_store=self.store,
-            baseline_override=override,
-        )
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
+            optimizer.run(
+                "You are helpful.",
+                run_store=self.store,
+                baseline_override=override,
+            )
 
-        # _run_eval should NOT have been called for the baseline
-        self.assertEqual(call_count["n"], 0)
+        # baseline skipped — only the final verification eval runs
+        self.assertEqual(call_count["n"], 1)
 
     def test_without_baseline_override_eval_is_called(self):
-        optimizer, call_count = self._make_optimizer_with_mocked_run_eval(None)
+        optimizer, call_count, _, strategy_mock = self._run_with_patches(None)
 
-        optimizer.run("You are helpful.", run_store=self.store)
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
+            optimizer.run("You are helpful.", run_store=self.store)
 
-        # _run_eval called once for baseline, once for final verify = 2
-        self.assertGreaterEqual(call_count["n"], 1)
+        # baseline + final verification = at least 2 calls
+        self.assertGreaterEqual(call_count["n"], 2)
 
     def test_baseline_override_saved_to_run(self):
         override = EvalSnapshot(mean_score=0.61, scores_by_metric={"rouge": 0.61})
-        optimizer, _ = self._make_optimizer_with_mocked_run_eval(override)
+        optimizer, _, _, strategy_mock = self._run_with_patches(override)
 
-        optimizer.run(
-            "You are helpful.",
-            run_store=self.store,
-            baseline_override=override,
-        )
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
+            optimizer.run(
+                "You are helpful.",
+                run_store=self.store,
+                baseline_override=override,
+            )
 
         run = self.store.get_latest_run()
         self.assertIsNotNone(run)
@@ -485,35 +480,7 @@ class TestBranchedFromPassthrough(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp()
         self.store = RunStore(root=Path(self.tmpdir) / ".reflex")
 
-    def test_branched_from_saved_in_run_config(self):
-        override = EvalSnapshot(mean_score=0.58, scores_by_metric={})
-        optimizer = _make_fake_optimizer()
-
-        fake_snap = EvalSnapshot(mean_score=0.75, scores_by_metric={})
-        fake_result = OptimizationResult(
-            best_prompt="improved", best_score=0.75,
-            iterations=[IterationRecord(iteration=1, system_prompt="improved", score=0.75)],
-            converged=False, baseline=override, final=fake_snap,
-        )
-        optimizer._run_eval = MagicMock(return_value=fake_snap)
-        strategy_mock = MagicMock()
-        strategy_mock.run.return_value = fake_result
-        optimizer._get_strategy = MagicMock(return_value=strategy_mock)
-
-        optimizer.run(
-            "You are helpful.",
-            run_store=self.store,
-            baseline_override=override,
-            branched_from={"run_id": "003", "iteration": 5},
-        )
-
-        run = self.store.get_latest_run()
-        config = run.load_config()
-        self.assertIn("branched_from", config)
-        self.assertEqual(config["branched_from"]["run_id"], "003")
-        self.assertEqual(config["branched_from"]["iteration"], 5)
-
-    def test_no_branched_from_not_in_config(self):
+    def _make_patched_optimizer(self):
         optimizer = _make_fake_optimizer()
         fake_snap = EvalSnapshot(mean_score=0.75, scores_by_metric={})
         fake_result = OptimizationResult(
@@ -524,9 +491,33 @@ class TestBranchedFromPassthrough(unittest.TestCase):
         optimizer._run_eval = MagicMock(return_value=fake_snap)
         strategy_mock = MagicMock()
         strategy_mock.run.return_value = fake_result
-        optimizer._get_strategy = MagicMock(return_value=strategy_mock)
+        return optimizer, strategy_mock
 
-        optimizer.run("You are helpful.", run_store=self.store)
+    def test_branched_from_saved_in_run_config(self):
+        override = EvalSnapshot(mean_score=0.58, scores_by_metric={})
+        optimizer, strategy_mock = self._make_patched_optimizer()
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
+            optimizer.run(
+                "You are helpful.",
+                run_store=self.store,
+                baseline_override=override,
+                branched_from={"run_id": "003", "iteration": 5},
+            )
+
+        run = self.store.get_latest_run()
+        config = run.load_config()
+        self.assertIn("branched_from", config)
+        self.assertEqual(config["branched_from"]["run_id"], "003")
+        self.assertEqual(config["branched_from"]["iteration"], 5)
+
+    def test_no_branched_from_not_in_config(self):
+        optimizer, strategy_mock = self._make_patched_optimizer()
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock):
+            optimizer.run("You are helpful.", run_store=self.store)
 
         run = self.store.get_latest_run()
         config = run.load_config()

@@ -10,17 +10,15 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
-import time
 import unittest
 from http.client import HTTPConnection
-from pathlib import Path
 
 from aevyra_reflex.run_store import (
     CheckpointState,
     IterationState,
     RunStore,
 )
-from aevyra_reflex.dashboard.server import serve, _DashboardHandler
+from aevyra_reflex.dashboard.server import _DashboardHandler
 from http.server import ThreadingHTTPServer as HTTPServer
 
 
@@ -219,7 +217,7 @@ class TestDashboardCompletedRun(unittest.TestCase):
         self.assertAlmostEqual(data[0]["final_score"], 0.90)
 
     def test_completed_run_detail(self):
-        status, data = _get(self.conn, f"/api/runs/001")
+        status, data = _get(self.conn, "/api/runs/001")
         self.assertEqual(status, 200)
         self.assertTrue(data["is_complete"])
         self.assertIsNotNone(data["result"])

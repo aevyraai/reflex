@@ -543,7 +543,7 @@ def logs(
         ts_raw = entry.get("ts", "")
         # Format timestamp as HH:MM:SS if parseable
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime
             dt = datetime.fromisoformat(ts_raw)
             ts = dt.astimezone().strftime("%H:%M:%S")
         except Exception:
