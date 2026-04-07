@@ -283,31 +283,35 @@ class TestOllamaEndToEnd:
         from aevyra_reflex.optimizer import PromptOptimizer, OptimizerConfig
 
         try:
-            from aevyra_verdict import Dataset, ExactMatch
+            from aevyra_verdict import Dataset, RougeScore
             from aevyra_verdict.dataset import Conversation, Message
         except ImportError:
             pytest.skip("aevyra_verdict not installed")
 
         conversations = [
             Conversation(
-                messages=[Message(role="user", content="The product exceeded my expectations!")],
-                ideal="positive",
+                messages=[Message(role="user", content="Summarise in one sentence: The cat sat on the mat and looked out the window.")],
+                ideal="A cat sat on the mat and gazed outside.",
             ),
             Conversation(
-                messages=[Message(role="user", content="Terrible quality, broke after a day.")],
-                ideal="negative",
+                messages=[Message(role="user", content="Summarise in one sentence: The dog ran through the park chasing a red ball.")],
+                ideal="A dog chased a ball through the park.",
             ),
             Conversation(
-                messages=[Message(role="user", content="It works as described, nothing more.")],
-                ideal="neutral",
+                messages=[Message(role="user", content="Summarise in one sentence: The chef prepared a delicious meal using fresh ingredients from the garden.")],
+                ideal="A chef cooked a fresh meal from garden ingredients.",
             ),
             Conversation(
-                messages=[Message(role="user", content="Absolutely love it, highly recommend.")],
-                ideal="positive",
+                messages=[Message(role="user", content="Summarise in one sentence: The students studied late into the night before their final exams.")],
+                ideal="Students studied late at night before exams.",
             ),
             Conversation(
-                messages=[Message(role="user", content="Would not buy again.")],
-                ideal="negative",
+                messages=[Message(role="user", content="Summarise in one sentence: The rain fell heavily on the city streets washing away the dust.")],
+                ideal="Heavy rain washed the dust from city streets.",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="Summarise in one sentence: The engineer fixed the broken pipeline before the water pressure dropped too low.")],
+                ideal="An engineer repaired the pipeline before pressure dropped.",
             ),
         ]
         dataset = Dataset(conversations=conversations)
@@ -325,8 +329,8 @@ class TestOllamaEndToEnd:
             PromptOptimizer(config=config)
             .set_dataset(dataset)
             .add_provider("local", MODEL, base_url=OLLAMA_BASE_URL)
-            .add_metric(ExactMatch())
-            .run("Classify sentiment.")
+            .add_metric(RougeScore())
+            .run("Summarise the sentence concisely.")
         )
 
         baseline = result.baseline.mean_score
