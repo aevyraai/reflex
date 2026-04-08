@@ -449,6 +449,9 @@ experimenting with different structural organizations of a system prompt.
 ## Score trajectory
 {score_trajectory}
 
+## Transform history
+{structural_history}
+
 ## Structural analysis
 {analysis}
 
@@ -456,8 +459,12 @@ experimenting with different structural organizations of a system prompt.
 {failing_samples}
 
 ## Your task
-Based on the failures and your structural analysis, create the best possible \
-reorganization of this prompt. You may:
+Based on the failures, your structural analysis, and the transform history above, \
+create the best possible reorganization of this prompt. The history shows which \
+structural approaches already helped (✓), had no effect (✗ no effect), or hurt \
+(✗ hurt) — use this to avoid repeating dead ends and build on what worked.
+
+You may:
 - Reorder sections for better attention allocation
 - Change formatting (markdown, XML tags, plain text, numbered lists)
 - Add structural markers (headers, delimiters, tags)

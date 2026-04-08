@@ -140,9 +140,11 @@ class StructuralStrategy(Strategy):
         transform_keys = list(STRUCTURAL_TRANSFORMS.keys())
 
         for i in range(config.max_iterations):
-            logger.info(f"Iteration {i + 1}/{config.max_iterations}")
+            tag = f"[structural][iter {i + 1}/{config.max_iterations}]"
+            logger.info(f"{tag} Starting")
 
             # 1. Evaluate current prompt
+            logger.info(f"{tag} Running eval...")
             current_score, failing_samples, eval_tokens = _run_eval(
                 prompt=current_prompt,
                 dataset=dataset,
@@ -162,10 +164,10 @@ class StructuralStrategy(Strategy):
             if on_iteration:
                 on_iteration(record)
 
-            logger.info(f"  Score: {current_score:.4f} (target: {config.score_threshold:.4f})")
+            logger.info(f"{tag} Score: {current_score:.4f}  target: {config.score_threshold:.4f}  failing samples: {len(failing_samples)}")
 
             if current_score >= config.score_threshold:
-                logger.info("Score threshold met — stopping.")
+                logger.info(f"{tag} Score threshold met — stopping.")
                 return OptimizationResult(
                     best_prompt=current_prompt,
                     best_score=current_score,
@@ -173,8 +175,9 @@ class StructuralStrategy(Strategy):
                     converged=True,
                 )
 
-            # 2. Ask Claude to analyze structural weaknesses
+            # 2. Ask reasoning model to analyze structural weaknesses
             reasoning_before = getattr(agent, "tokens_used", 0)
+            logger.info(f"{tag} Analyzing structural weaknesses (transform history: {len(structural_history)} entries)...")
             analysis = agent.analyze_prompt_structure(
                 system_prompt=current_prompt,
                 failing_samples=failing_samples,
@@ -185,7 +188,7 @@ class StructuralStrategy(Strategy):
             # 3. Pick transforms we haven't tried yet, plus agent-guided variant
             untried = [k for k in transform_keys if k not in transforms_tried]
             if not untried:
-                # All tried — reset and let Claude guide selection
+                # All tried — reset and let the agent guide selection
                 transforms_tried.clear()
                 untried = transform_keys[:]
 
@@ -209,14 +212,10 @@ class StructuralStrategy(Strategy):
             max_workers = min(len(round_transforms) + 1, config.max_workers or 4)
             num_variants = len(round_transforms) + 1  # transforms + freeform
 
-            logger.info(
-                f"  Generating {num_variants} variants "
-                f"({max_workers} workers in parallel)"
-            )
+            logger.info(f"{tag} Generating {num_variants} variants ({max_workers} workers)...")
             t0 = time.time()
 
             with ThreadPoolExecutor(max_workers=max_workers) as gen_pool:
-                # Submit all transform generations + freeform in parallel
                 gen_futures = {
                     gen_pool.submit(_gen_variant, t_name): t_name
                     for t_name in round_transforms
@@ -229,6 +228,7 @@ class StructuralStrategy(Strategy):
                             failing_samples=failing_samples,
                             analysis=analysis,
                             score_trajectory=[r.score for r in iterations],
+                            structural_history=structural_history,
                         ),
                     )
                 )
@@ -236,21 +236,18 @@ class StructuralStrategy(Strategy):
                 for future in as_completed(gen_futures):
                     t_name, variant = future.result()
                     variants.append((t_name, variant))
-                    logger.info(f"    Generated: {t_name}")
 
                 freeform_name, freeform_text = freeform_future.result()
                 variants.append((freeform_name, freeform_text))
-                logger.info("    Generated: agent_guided")
 
             gen_elapsed = time.time() - t0
-            logger.info(
-                f"  Generated {num_variants} variants in {gen_elapsed:.1f}s"
-            )
+            logger.info(f"{tag} Generated {num_variants} variants in {gen_elapsed:.1f}s")
 
             # 5. Evaluate all variants in parallel and pick the best
             best_variant_score = current_score
             best_variant_prompt = current_prompt
             best_variant_name = "current"
+            variant_scores: dict[str, float] = {}
 
             def _eval_variant(v_name: str, v_prompt: str) -> tuple[str, str, float]:
                 v_score, _, _toks = _run_eval(
@@ -263,10 +260,7 @@ class StructuralStrategy(Strategy):
                 )
                 return v_name, v_prompt, v_score
 
-            logger.info(
-                f"  Evaluating {len(variants)} variants "
-                f"({max_workers} workers in parallel)"
-            )
+            logger.info(f"{tag} Evaluating {len(variants)} variants ({max_workers} workers)...")
             t0 = time.time()
 
             with ThreadPoolExecutor(max_workers=max_workers) as eval_pool:
@@ -276,7 +270,11 @@ class StructuralStrategy(Strategy):
                 ]
                 for future in as_completed(eval_futures):
                     v_name, v_prompt, v_score = future.result()
-                    logger.info(f"    {v_name}: {v_score:.4f}")
+                    variant_scores[v_name] = v_score
+                    delta = v_score - current_score
+                    sign = "+" if delta >= 0 else ""
+                    effect = "✓ helped" if delta > 0.005 else ("✗ no effect" if abs(delta) <= 0.005 else "✗ hurt")
+                    logger.info(f"{tag}   {v_name}: {v_score:.4f} (Δ{sign}{delta:.4f} — {effect})")
 
                     if v_score > best_variant_score:
                         best_variant_score = v_score
@@ -285,26 +283,28 @@ class StructuralStrategy(Strategy):
 
             eval_elapsed = time.time() - t0
             logger.info(
-                f"  Evaluated {len(variants)} variants in {eval_elapsed:.1f}s "
+                f"{tag} Evaluated {len(variants)} variants in {eval_elapsed:.1f}s "
                 f"({eval_elapsed / len(variants):.1f}s/variant)"
             )
 
+            delta = best_variant_score - current_score
+            sign = "+" if delta >= 0 else ""
             structural_history.append({
                 "iteration": i + 1,
                 "transforms_tried": [v[0] for v in variants],
                 "best_transform": best_variant_name,
                 "score_before": current_score,
                 "score_after": best_variant_score,
+                "delta": delta,
             })
 
+            record.change_summary = best_variant_name if best_variant_name != "current" else ""
+
             if best_variant_name != "current":
-                logger.info(
-                    f"  Best variant: {best_variant_name} "
-                    f"({current_score:.4f} → {best_variant_score:.4f})"
-                )
+                logger.info(f"{tag} Winner: {best_variant_name} ({current_score:.4f} → {best_variant_score:.4f}, Δ{sign}{delta:.4f})")
                 current_prompt = best_variant_prompt
             else:
-                logger.info("  No variant improved over current prompt.")
+                logger.info(f"{tag} No variant improved over current prompt.")
 
         best = max(iterations, key=lambda r: r.score)
         return OptimizationResult(
