@@ -162,6 +162,9 @@ def optimize(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(message)s",
     )
+    # Silence noisy third-party HTTP/network loggers that flood verbose output
+    for _noisy in ("httpx", "httpcore", "openai", "anthropic", "urllib3", "requests"):
+        logging.getLogger(_noisy).setLevel(logging.WARNING)
 
     from aevyra_reflex.optimizer import OptimizerConfig, PromptOptimizer, _resolve_provider
 

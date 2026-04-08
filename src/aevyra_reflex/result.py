@@ -32,6 +32,7 @@ class IterationRecord:
     reasoning: str = ""
     eval_tokens: int = 0       # tokens used by the eval model this iteration
     reasoning_tokens: int = 0  # tokens used by the reasoning model this iteration
+    change_summary: str = ""   # one-liner: what the reasoning model changed this iteration
 
 
 @dataclass

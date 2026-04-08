@@ -316,7 +316,7 @@ class LLM:
         self,
         system_prompt: str,
         failing_samples: list[dict[str, Any]],
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         """Analyze failures and propose a revised system prompt.
 
         Args:
@@ -324,7 +324,8 @@ class LLM:
             failing_samples: List of dicts with keys: input, response, ideal, score.
 
         Returns:
-            (revised_prompt, reasoning) — the new prompt and the agent's analysis.
+            (revised_prompt, reasoning, change_summary) — the new prompt, the
+            agent's full analysis, and a one-liner summarising what changed.
         """
         from aevyra_reflex.prompts import DIAGNOSE_FAILURES_PROMPT
 
@@ -334,7 +335,11 @@ class LLM:
             failing_samples=samples_text,
         )
         response = self.generate(prompt, temperature=0.7)
-        return _extract_revised_prompt(response), response
+        return (
+            _extract_revised_prompt(response),
+            response,
+            _extract_change_summary(response),
+        )
 
     def refine(
         self,
@@ -345,18 +350,29 @@ class LLM:
         target_score: float,
         failing_samples: list[dict[str, Any]],
         previous_reasoning: str,
-    ) -> tuple[str, str]:
-        """Refine a prompt based on ongoing iteration results."""
+        rewrite_log: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, str, str]:
+        """Refine a prompt based on ongoing iteration results.
+
+        Args:
+            rewrite_log: List of dicts with keys: iteration, score, delta,
+                change_summary — the causal history of what was tried and what worked.
+
+        Returns:
+            (revised_prompt, reasoning, change_summary)
+        """
         from aevyra_reflex.prompts import REFINE_PROMPT
 
         improved = len(score_trajectory) >= 2 and score_trajectory[-1] > score_trajectory[-2]
         trajectory_str = " → ".join(f"{s:.3f}" for s in score_trajectory)
         samples_text = _format_failing_samples(failing_samples)
+        history_text = _format_rewrite_log(rewrite_log or [])
 
         prompt = REFINE_PROMPT.format(
             system_prompt=system_prompt,
             iteration=iteration,
             score_trajectory=trajectory_str,
+            rewrite_history=history_text,
             mean_score=mean_score,
             target_score=target_score,
             failing_samples=samples_text,
@@ -364,7 +380,11 @@ class LLM:
             improved_text="improved" if improved else "not improved",
         )
         response = self.generate(prompt, temperature=0.7)
-        return _extract_revised_prompt(response), response
+        return (
+            _extract_revised_prompt(response),
+            response,
+            _extract_change_summary(response),
+        )
 
     def generate_candidate(
         self,
@@ -614,6 +634,45 @@ def _format_failing_samples(samples: list[dict[str, Any]], max_samples: int = 10
         lines.append("")
     if len(samples) > max_samples:
         lines.append(f"... and {len(samples) - max_samples} more failing samples")
+    return "\n".join(lines)
+
+
+def _extract_change_summary(response: str) -> str:
+    """Extract the one-line change summary from the agent's response.
+
+    Looks for a '## Summary of change' section and returns the first non-empty
+    line after it. Falls back to an empty string if not found.
+    """
+    marker = "## Summary of change"
+    idx = response.lower().find(marker.lower())
+    if idx == -1:
+        return ""
+    text = response[idx + len(marker):]
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line.strip("[]").strip()
+    return ""
+
+
+def _format_rewrite_log(rewrite_log: list[dict]) -> str:
+    """Format the causal rewrite history for inclusion in a prompt.
+
+    Each entry should have: iteration, score, delta, change_summary.
+    """
+    if not rewrite_log:
+        return "(no previous rewrites — this is the first refinement)"
+    lines = []
+    for entry in rewrite_log:
+        iteration = entry.get("iteration", "?")
+        score = entry.get("score", 0.0)
+        delta = entry.get("delta", 0.0)
+        summary = entry.get("change_summary") or "(no summary)"
+        sign = "+" if delta >= 0 else ""
+        effect = "✓ helped" if delta > 0.005 else ("✗ no effect" if abs(delta) <= 0.005 else "✗ hurt")
+        lines.append(
+            f"Iter {iteration} (score: {score:.4f}, Δ{sign}{delta:.4f} — {effect}): {summary}"
+        )
     return "\n".join(lines)
 
 

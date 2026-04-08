@@ -39,6 +39,18 @@ Each iteration:
 4. The reasoning model analyzes the failures and proposes a revised prompt
 5. If the score meets the threshold, stop; otherwise repeat
 
+The reasoning model maintains a **causal rewrite log** across iterations — a
+compact record of what was changed each round and what score delta resulted.
+From iteration 2 onwards, this history is injected into the prompt so the
+model knows which approaches helped (✓), had no effect (✗ no effect), or hurt
+(✗ hurt) — and can avoid repeating dead ends.
+
+```
+Rewrite history:
+Iter 1 (score: 0.6234, Δ+0.0871 — ✓ helped): Added numbered reasoning steps
+Iter 2 (score: 0.7105, Δ+0.0029 — ✗ no effect): Added "think carefully" instruction
+```
+
 Best for: prompts that are structurally fine but have wording issues, missing
 constraints, or ambiguous instructions.
 

@@ -148,6 +148,13 @@ Each iteration:
 6. The reasoning model proposes a revised prompt grounded in the actual failure patterns
 7. If the score meets the threshold, stop. Otherwise repeat with the new prompt.
 
+The reasoning model maintains a **causal rewrite log** across iterations — a compact record of what changed each round and whether it helped. From iteration 2 onwards this history is fed back into the prompt, so the model knows which edits helped (✓), had no effect (✗ no effect), or hurt (✗ hurt) and can avoid repeating dead ends:
+
+```
+Iter 1 (score: 0.6234, Δ+0.0871 — ✓ helped): Added numbered reasoning steps
+Iter 2 (score: 0.7105, Δ+0.0029 — ✗ no effect): Added "think carefully" instruction
+```
+
 ### PDO strategy
 
 Maintains a pool of candidate prompts and uses dueling bandits to find the best:

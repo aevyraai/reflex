@@ -502,8 +502,12 @@ class PromptOptimizer:
             )
 
         # --- Step 1: Baseline eval (skip if resuming or branching with a known baseline) ---
+        run_tag = f"[run {run.run_id}]" if run else "[run ?]"
+        strategy_tag = f"[{self.config.strategy}]"
+        tag = f"{run_tag}{strategy_tag}"
+
         if baseline_override is not None:
-            logger.info("Branch run — reusing parent baseline.")
+            logger.info(f"{tag} Branch run — reusing parent baseline.")
             baseline = baseline_override
             if run:
                 run.save_baseline({
@@ -511,15 +515,15 @@ class PromptOptimizer:
                     "scores_by_metric": baseline.scores_by_metric,
                 })
         elif checkpoint and checkpoint.baseline:
-            logger.info("Resuming — using saved baseline.")
+            logger.info(f"{tag} Resuming — using saved baseline.")
             baseline = EvalSnapshot(
                 mean_score=checkpoint.baseline["mean_score"],
                 scores_by_metric=checkpoint.baseline.get("scores_by_metric", {}),
             )
         else:
-            logger.info("Running baseline evaluation...")
+            logger.info(f"{tag} Running baseline evaluation...")
             baseline = self._run_eval(initial_prompt)
-            logger.info(f"Baseline score: {baseline.mean_score:.4f}")
+            logger.info(f"{tag} Baseline score: {baseline.mean_score:.4f}")
             if run:
                 run.save_baseline({
                     "mean_score": baseline.mean_score,
@@ -560,6 +564,7 @@ class PromptOptimizer:
                     reasoning=record.reasoning,
                     eval_tokens=getattr(record, "eval_tokens", 0),
                     reasoning_tokens=getattr(record, "reasoning_tokens", 0),
+                    change_summary=getattr(record, "change_summary", ""),
                 ))
                 # Update checkpoint
                 run.save_checkpoint(CheckpointState(
@@ -602,9 +607,9 @@ class PromptOptimizer:
         )
 
         # --- Step 3: Final verification eval ---
-        logger.info("Running final verification...")
+        logger.info(f"{tag} Running final verification...")
         final = self._run_eval(result.best_prompt)
-        logger.info(f"Final score: {final.mean_score:.4f}")
+        logger.info(f"{tag} Final score: {final.mean_score:.4f}  (baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})")
 
         # Attach baseline, final, and strategy info to result
         result.baseline = baseline
