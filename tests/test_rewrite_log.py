@@ -106,7 +106,7 @@ class TestFormatRewriteLog:
             {"iteration": 3, "score": 0.72, "delta": 0.01, "change_summary": "Tweaked wording"},
         ]
         result = self._format(log)
-        lines = [l for l in result.splitlines() if l.strip()]
+        lines = [line for line in result.splitlines() if line.strip()]
         assert len(lines) == 3
         assert "Iter 1" in lines[0]
         assert "Iter 2" in lines[1]
