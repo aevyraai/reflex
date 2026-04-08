@@ -73,6 +73,10 @@ class OptimizationResult:
     total_eval_tokens: int = 0       # all eval-model tokens across the run
     total_reasoning_tokens: int = 0  # all reasoning-model tokens across the run
 
+    # Dataset split info (filled by optimizer when train_ratio < 1.0)
+    train_size: int = 0  # examples used during optimization
+    test_size: int = 0   # held-out examples used for baseline and final eval
+
     # Strategy metadata (filled by auto strategy or optimizer)
     strategy_name: str = ""
     phase_history: list[dict] = field(default_factory=list)  # auto strategy phases
@@ -106,8 +110,13 @@ class OptimizationResult:
             lines.append("=" * 52)
             lines.append("  OPTIMIZATION RESULTS")
             lines.append("=" * 52)
-            lines.append(f"  Baseline score   : {self.baseline.mean_score:.4f}")
-            lines.append(f"  Final score      : {self.final.mean_score:.4f}")
+            if self.train_size and self.test_size:
+                lines.append(f"  Train / test     : {self.train_size} / {self.test_size} samples")
+                lines.append(f"  Baseline score   : {self.baseline.mean_score:.4f}  (on {self.test_size}-sample test set)")
+                lines.append(f"  Final score      : {self.final.mean_score:.4f}  (on {self.test_size}-sample test set)")
+            else:
+                lines.append(f"  Baseline score   : {self.baseline.mean_score:.4f}")
+                lines.append(f"  Final score      : {self.final.mean_score:.4f}")
             lines.append(f"  Improvement      : {sign}{imp:.4f} ({sign}{pct:.1f}%)")
             lines.append(f"  Iterations       : {len(self.iterations)}")
             lines.append(f"  Converged        : {self.converged}")
@@ -612,6 +621,10 @@ class OptimizationResult:
                 "system_prompt": self.final.system_prompt,
                 "total_tokens": self.final.total_tokens,
             }
+        if self.train_size:
+            d["train_size"] = self.train_size
+        if self.test_size:
+            d["test_size"] = self.test_size
         if self.improvement is not None:
             d["improvement"] = self.improvement
             d["improvement_pct"] = self.improvement_pct

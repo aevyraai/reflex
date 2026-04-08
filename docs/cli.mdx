@@ -39,6 +39,7 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `-o`, `--output` | — | Save the optimized prompt to this file |
 | `--results-json` | — | Save full results (iterations, scores, analysis) to JSON |
 | `--run-dir` | `.reflex/` | Directory for run history and checkpoints |
+| `--train-split` | `0.8` | Fraction of data used for optimization. The rest is held out for baseline and final eval scores. Set to `1.0` to disable splitting |
 | `--resume` | `false` | Resume the latest interrupted run for this dataset |
 | `--resume-from` | — | Resume a specific run by ID (e.g. `001`) or directory path |
 | `-v`, `--verbose` | `false` | Show detailed logs including timing |
@@ -170,7 +171,7 @@ aevyra-reflex dashboard [OPTIONS]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--run-dir` | `.reflex/` | Directory for run history |
-| `-p`, `--port` | `8337` | Port to serve on |
+| `-p`, `--port` | `8128` | Port to serve on |
 | `--host` | `127.0.0.1` | Bind address |
 | `--no-open` | `false` | Don't open the browser automatically |
 
