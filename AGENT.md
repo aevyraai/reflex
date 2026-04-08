@@ -11,29 +11,36 @@ It depends on `aevyra-verdict` for evaluation (running completions, scoring with
 ```
 src/aevyra_reflex/
 ├── __init__.py          # Public API exports
-├── cli.py               # Typer CLI — single `optimize` command
+├── cli.py               # Typer CLI — optimize, runs, logs, dashboard commands
 ├── optimizer.py         # PromptOptimizer — orchestrates baseline → strategy → verify
 ├── result.py            # OptimizationResult, EvalSnapshot, IterationRecord
-├── agent.py             # Claude agent wrapper (diagnosis, revision, judging)
+├── agent.py             # LLM agent wrapper (diagnosis, revision, judging)
 ├── prompts.py           # All prompt templates for all strategies
+├── run_store.py         # Run persistence, checkpointing, iteration logging
+├── callbacks.py         # Callback protocol (MLflow, custom hooks)
+├── dashboard/           # Local web UI (FastAPI + static assets)
 └── strategies/
-    ├── __init__.py      # Strategy registry
+    ├── __init__.py      # Strategy registry (register_strategy, list_strategies)
     ├── base.py          # Abstract Strategy base class
-    ├── iterative.py     # Diagnose-revise loop
+    ├── iterative.py     # Diagnose-revise loop with causal rewrite log
     ├── pdo.py           # Dueling bandits with Thompson sampling
     ├── fewshot.py       # Few-shot example selection and optimization
-    ├── structural.py    # Prompt structure and formatting optimization
+    ├── structural.py    # Structural variant generation with transform history
     └── auto.py          # Adaptive multi-phase (default — combines all axes)
 ```
 
 ## Key concepts
 
-- **PromptOptimizer.run()** does 3 steps: baseline eval → strategy optimization → verification eval
+- **PromptOptimizer.run()** does 3 steps: (1) baseline eval on held-out test set → (2) strategy optimization on train set → (3) verification eval on held-out test set. Supports callbacks, run checkpointing, and resume.
+- **Train/test split**: By default the dataset is split 80/20. Optimization only sees the train split; baseline and final scores are computed on the held-out test set so reported improvement is honest. Controlled by `OptimizerConfig.train_ratio` / `--train-split`.
+- **Statistical significance**: After every run, a paired Wilcoxon signed-rank test (scipy) or paired t-test (fallback) compares per-sample baseline vs final scores. `OptimizationResult.p_value` and `is_significant` are always populated; shown in `summary()` as `p=0.0234  ✓ significant (α=0.05)`. Use `--eval-runs N` to average N eval passes and report `mean ± std`.
 - **Auto strategy** (default): Claude analyzes weaknesses → picks the best optimization axis → applies it for a few iterations → re-evaluates → picks next axis → repeat. Adaptively combines structural, iterative, fewshot, and pdo.
-- **Iterative strategy**: eval → find worst samples → Claude diagnoses → revised prompt → repeat
+- **Iterative strategy**: eval → find worst samples → Claude diagnoses → revised prompt → repeat. Maintains a **causal rewrite log** (iteration, score delta, change summary, ✓/✗ outcome) fed back into subsequent prompts so the agent avoids repeating dead ends.
+- **Structural strategy**: generates structural variants in parallel (section reorder, markdown, XML tags, flat text) → evaluates all → keeps best → iterates. Maintains a **transform history** across rounds (which transforms were tried, which won, score deltas) injected into `freeform_restructure` to guide exploration.
 - **PDO strategy**: pool of candidates → Thompson sampling picks duel pairs → pairwise judging → Copeland ranking → mutation → convergence
 - **Few-shot strategy**: bootstrap exemplars from high-scoring samples → Claude selects diverse subset → inject as few-shot examples → iterate
-- **Structural strategy**: generate structural variants (section reorder, markdown, XML tags, flat text) → evaluate all → keep best structure → iterate
+- **Source model migration**: `--source-model` / `OptimizerConfig.source_model` tells the reasoning model which model family the prompt was written for (e.g. `claude-sonnet`, `gpt-4o`). Enables idiom adaptation — XML tags → Markdown, role framing adjustments, verbosity tuning — when migrating prompts across model families.
+- **Run persistence**: every run is checkpointed to `.reflex/runs/`. Each iteration saves the prompt, score, reasoning, token counts, and `change_summary`. Interrupted runs are resumable with `--resume` / `--resume-from`.
 - All evaluation goes through `aevyra-verdict`'s EvalRunner
 
 ## Development

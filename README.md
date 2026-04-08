@@ -282,6 +282,41 @@ config = OptimizerConfig(
 Without `--source-model`, reflex still optimizes the prompt — it just won't have
 the explicit migration context to guide its rewrites.
 
+## Statistical significance
+
+After every run, reflex tests whether the improvement is real or noise — a
+paired test on per-sample scores (Wilcoxon signed-rank via scipy, paired t-test
+fallback). The result appears in the summary:
+
+```
+  Baseline score   : 0.5821
+  Final score      : 0.8612
+  Improvement      : +0.2791 (+47.9%)
+  Significance     : p=0.0021  ✓ significant (α=0.05, paired test)
+```
+
+For noisy tasks where LLM responses vary run-to-run, average multiple eval
+passes with `--eval-runs`:
+
+```bash
+# Average 3 eval passes for baseline and final, report mean ± std
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --eval-runs 3
+```
+
+```
+  Baseline score   : 0.5821 ± 0.0180  (3 runs)
+  Final score      : 0.8612 ± 0.0110  (3 runs)
+```
+
+Install scipy for the Wilcoxon test (recommended); the t-test fallback works
+without it:
+
+```bash
+pip install scipy
+```
+
 ## Choosing a reasoning model
 
 By default, reflex uses Claude Sonnet for reasoning — analyzing failures,
