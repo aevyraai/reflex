@@ -653,7 +653,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
 def serve(
     run_dir: str | Path = ".reflex",
     host: str = "127.0.0.1",
-    port: int = 8337,
+    port: int = 8128,
     open_browser: bool = True,
 ) -> None:
     """Start the dashboard server.

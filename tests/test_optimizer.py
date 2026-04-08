@@ -419,7 +419,7 @@ class TestBaselineOverride(unittest.TestCase):
             final=fake_snap,
         )
 
-        def fake_run_eval(prompt):
+        def fake_run_eval(prompt, dataset=None):
             call_count["n"] += 1
             return fake_snap
 

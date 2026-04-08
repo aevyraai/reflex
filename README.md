@@ -58,6 +58,7 @@ Output:
   aevyra-reflex
 ====================================================
   Dataset    : dataset.jsonl (50 samples)
+  Split      : 40 train / 10 test (80% / 20%)
   Model(s)   : local/llama3.1
   Strategy   : auto
   Metrics    : rouge
@@ -77,8 +78,9 @@ Step 3/3  Verifying...
 ====================================================
   OPTIMIZATION RESULTS
 ====================================================
-  Baseline score   : 0.5821
-  Final score      : 0.8612
+  Train / test     : 40 / 10 samples
+  Baseline score   : 0.5821  (on 10-sample test set)
+  Final score      : 0.8612  (on 10-sample test set)
   Improvement      : +0.2791 (+47.9%)
   Iterations       : 3
   Converged        : True
@@ -249,6 +251,27 @@ aevyra-reflex runs
 Each run captures its config, dataset path, initial prompt, and per-iteration
 state, so every experiment is reproducible and comparable.
 
+## Honest eval scores with train/test split
+
+By default, reflex holds out 20% of your dataset for evaluation. The optimization
+loop only sees the training examples — the held-out test set is used exclusively
+for the baseline and final scores you see in the results summary.
+
+This prevents the reported improvement from being inflated by the same examples
+that drove the rewrites. The split is deterministic (seed 42), so results are
+reproducible.
+
+```bash
+# Default: 80/20 split
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1
+
+# Custom split
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 0.9
+
+# No split (useful for very small datasets < 20 examples)
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 1.0
+```
+
 ## Migrating a prompt to a new model
 
 If you've written a prompt for Claude and want to optimize it for Llama or GPT-4o,
@@ -370,7 +393,7 @@ Explore your runs visually with the built-in web dashboard:
 aevyra-reflex dashboard
 ```
 
-Opens a local web UI at `http://localhost:7430` showing all your runs with
+Opens a local web UI at `http://localhost:8128` showing all your runs with
 score trajectory charts, prompt diffs between iterations, reasoning analysis,
 and config snapshots. Click into any run to drill down into individual
 iterations and see exactly what the reasoning model changed and why.

@@ -16,14 +16,16 @@ iteration history, and analysis.
 | `best_score` | `float` | The score of the best prompt |
 | `iterations` | `list[IterationRecord]` | All iteration records |
 | `converged` | `bool` | Whether the score threshold was reached |
-| `baseline` | `EvalSnapshot \| None` | Baseline eval snapshot |
-| `final` | `EvalSnapshot \| None` | Final verification snapshot |
+| `baseline` | `EvalSnapshot \| None` | Baseline eval snapshot (on held-out test set if split is enabled) |
+| `final` | `EvalSnapshot \| None` | Final verification snapshot (on held-out test set if split is enabled) |
+| `train_size` | `int` | Number of training examples used for optimization (0 if no split) |
+| `test_size` | `int` | Number of held-out test examples used for baseline and final eval (0 if no split) |
 | `p_value` | `float \| None` | p-value from paired significance test (Wilcoxon or t-test). `None` if fewer than 2 samples or scipy not installed |
 | `is_significant` | `bool \| None` | `True` if `p_value < 0.05`. `None` when `p_value` is unavailable |
 | `total_eval_tokens` | `int` | Total tokens used by the eval model across the run |
 | `total_reasoning_tokens` | `int` | Total tokens used by the reasoning model across the run |
-| `strategy_name` | `str` | Strategy that was used |
-| `phase_history` | `list[dict]` | Auto strategy phase breakdown (empty for single-strategy runs) |
+| `strategy_name` | `str \| None` | Strategy that was used |
+| `phase_history` | `list[dict] \| None` | Auto mode phase breakdown |
 
 ### Computed properties
 
@@ -81,9 +83,9 @@ A single optimization iteration.
 | `score` | `float` | Overall score |
 | `scores_by_metric` | `dict[str, float]` | Per-metric scores |
 | `reasoning` | `str` | Agent's reasoning for the change |
-| `eval_tokens` | `int` | Tokens used by the eval model in this iteration |
-| `reasoning_tokens` | `int` | Tokens used by the reasoning model in this iteration |
-| `change_summary` | `str` | One-sentence summary of the most important change made (empty on iteration 1) |
+| `eval_tokens` | `int` | Tokens used by the eval model this iteration |
+| `reasoning_tokens` | `int` | Tokens used by the reasoning model this iteration |
+| `change_summary` | `str` | One-line description of what the agent changed (e.g. "Added output format constraints") |
 
 ## EvalSnapshot
 
