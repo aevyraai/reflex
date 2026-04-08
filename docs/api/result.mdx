@@ -18,8 +18,10 @@ iteration history, and analysis.
 | `converged` | `bool` | Whether the score threshold was reached |
 | `baseline` | `EvalSnapshot \| None` | Baseline eval snapshot |
 | `final` | `EvalSnapshot \| None` | Final verification snapshot |
-| `strategy_name` | `str \| None` | Strategy that was used |
-| `phase_history` | `list[dict] \| None` | Auto mode phase breakdown |
+| `total_eval_tokens` | `int` | Total tokens used by the eval model across the run |
+| `total_reasoning_tokens` | `int` | Total tokens used by the reasoning model across the run |
+| `strategy_name` | `str` | Strategy that was used |
+| `phase_history` | `list[dict]` | Auto strategy phase breakdown (empty for single-strategy runs) |
 
 ### Computed properties
 
@@ -77,6 +79,9 @@ A single optimization iteration.
 | `score` | `float` | Overall score |
 | `scores_by_metric` | `dict[str, float]` | Per-metric scores |
 | `reasoning` | `str` | Agent's reasoning for the change |
+| `eval_tokens` | `int` | Tokens used by the eval model in this iteration |
+| `reasoning_tokens` | `int` | Tokens used by the reasoning model in this iteration |
+| `change_summary` | `str` | One-sentence summary of the most important change made (empty on iteration 1) |
 
 ## EvalSnapshot
 
@@ -86,8 +91,9 @@ Scores from a single eval run (baseline or final).
 |----------|------|-------------|
 | `mean_score` | `float` | Mean score across all samples |
 | `scores_by_metric` | `dict[str, float]` | Per-metric mean scores |
-| `system_prompt` | `str \| None` | The system prompt used |
+| `system_prompt` | `str` | The system prompt used |
 | `samples` | `list[SampleSnapshot]` | Per-sample results |
+| `total_tokens` | `int` | Total tokens used by the eval model in this snapshot |
 
 ## SampleSnapshot
 
