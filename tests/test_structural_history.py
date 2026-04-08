@@ -26,7 +26,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ class TestFreeformRestructureSignature:
 
     def test_no_history_uses_fallback(self):
         llm = self._make_llm()
-        result = llm.freeform_restructure(
+        llm.freeform_restructure(
             current_prompt="You are a helpful assistant.",
             failing_samples=[],
             analysis="Structure is flat.",
