@@ -221,6 +221,16 @@ class OptimizerConfig:
     """Max parallel threads for variant evaluation and duel execution.
     For Ollama, match this to OLLAMA_NUM_PARALLEL (default 1)."""
 
+    eval_runs: int = 1
+    """Number of times to run each eval (baseline and final verification).
+    When > 1, scores are averaged across runs and a standard deviation is
+    reported alongside the mean. Use 3–5 for noisy tasks or small datasets
+    where a single eval pass may not be representative.
+
+    Note: eval_runs multiplies the cost of baseline and final evals. With
+    eval_runs=3 you run 3× as many completions for those two checkpoints.
+    Optimization iterations are unaffected (always 1 run each)."""
+
     extra_kwargs: dict[str, Any] = field(default_factory=dict)
     """Strategy-specific parameters. For PDO: total_rounds, duels_per_round,
     samples_per_duel, initial_pool_size, thompson_alpha, mutation_frequency,
@@ -521,9 +531,12 @@ class PromptOptimizer:
                 scores_by_metric=checkpoint.baseline.get("scores_by_metric", {}),
             )
         else:
-            logger.info(f"{tag} Running baseline evaluation...")
+            eval_runs = self.config.eval_runs
+            eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
+            logger.info(f"{tag} Running baseline evaluation{eval_label}...")
             baseline = self._run_eval(initial_prompt)
-            logger.info(f"{tag} Baseline score: {baseline.mean_score:.4f}")
+            std_label = f" ± {baseline.std_score:.4f}" if baseline.std_score > 0 else ""
+            logger.info(f"{tag} Baseline score: {baseline.mean_score:.4f}{std_label}")
             if run:
                 run.save_baseline({
                     "mean_score": baseline.mean_score,
@@ -607,7 +620,9 @@ class PromptOptimizer:
         )
 
         # --- Step 3: Final verification eval ---
-        logger.info(f"{tag} Running final verification...")
+        eval_runs = self.config.eval_runs
+        eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
+        logger.info(f"{tag} Running final verification{eval_label}...")
         final = self._run_eval(result.best_prompt)
         logger.info(f"{tag} Final score: {final.mean_score:.4f}  (baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})")
 
@@ -619,6 +634,14 @@ class PromptOptimizer:
         result.best_score = final.mean_score
         if not result.strategy_name:
             result.strategy_name = self.config.strategy
+
+        # Statistical significance: paired test on per-sample scores
+        p_val, is_sig = self._compute_significance(baseline, final)
+        result.p_value = p_val
+        result.is_significant = is_sig
+        if p_val is not None:
+            sig_label = "✓ significant" if is_sig else "✗ not significant"
+            logger.info(f"{tag} Significance: p={p_val:.4f} ({sig_label} at α=0.05)")
 
         # Accumulate token counts across all phases
         result.total_eval_tokens = (
@@ -688,8 +711,21 @@ class PromptOptimizer:
                     f"(OLLAMA_NUM_PARALLEL={num}, max_workers={self.config.max_workers})"
                 )
 
-    def _run_eval(self, prompt: str) -> EvalSnapshot:
-        """Run a full verdict eval with the given system prompt."""
+    def _run_eval(self, prompt: str, n_runs: int | None = None) -> EvalSnapshot:
+        """Run verdict eval with the given system prompt.
+
+        When n_runs > 1 (or when config.eval_runs > 1 and n_runs is None),
+        repeats the full eval that many times and returns an EvalSnapshot whose
+        mean_score is the average of the per-run means, std_score is the std dev
+        of those run-level means, and per-sample scores are averaged across runs.
+        """
+        effective_runs = n_runs if n_runs is not None else self.config.eval_runs
+        if effective_runs > 1:
+            return self._run_eval_multi(prompt, n_runs=effective_runs)
+        return self._run_eval_single(prompt)
+
+    def _run_eval_single(self, prompt: str) -> EvalSnapshot:
+        """Run a single verdict eval pass and return an EvalSnapshot."""
         from aevyra_verdict import EvalRunner
         from aevyra_verdict.dataset import Conversation, Dataset, Message
         from aevyra_verdict.runner import RunConfig
@@ -765,3 +801,161 @@ class PromptOptimizer:
             samples=sample_snapshots,
             total_tokens=total_tokens,
         )
+
+    def _run_eval_multi(self, prompt: str, n_runs: int = 3) -> EvalSnapshot:
+        """Run eval n_runs times and return an averaged EvalSnapshot with std_score."""
+        import statistics
+
+        logger.info(f"Running eval {n_runs}× and averaging...")
+        snapshots = [self._run_eval_single(prompt) for _ in range(n_runs)]
+
+        run_means = [s.mean_score for s in snapshots]
+        mean = statistics.mean(run_means)
+        std = statistics.stdev(run_means) if len(run_means) > 1 else 0.0
+
+        # Average per-sample scores across runs (samples are in the same order)
+        n_samples = min(len(s.samples) for s in snapshots) if snapshots else 0
+        avg_samples: list[SampleSnapshot] = []
+        for i in range(n_samples):
+            avg_score = sum(s.samples[i].score for s in snapshots) / n_runs
+            avg_samples.append(SampleSnapshot(
+                input=snapshots[0].samples[i].input,
+                response=snapshots[0].samples[i].response,
+                ideal=snapshots[0].samples[i].ideal,
+                score=avg_score,
+            ))
+
+        # Average per-metric scores
+        all_metric_keys: set[str] = set()
+        for s in snapshots:
+            all_metric_keys.update(s.scores_by_metric)
+        per_metric = {
+            k: sum(s.scores_by_metric.get(k, 0.0) for s in snapshots) / n_runs
+            for k in all_metric_keys
+        }
+
+        total_tokens = sum(s.total_tokens for s in snapshots)
+
+        return EvalSnapshot(
+            mean_score=mean,
+            scores_by_metric=per_metric,
+            samples=avg_samples,
+            total_tokens=total_tokens,
+            std_score=std,
+            n_runs=n_runs,
+        )
+
+    @staticmethod
+    def _compute_significance(
+        baseline: "EvalSnapshot",
+        final: "EvalSnapshot",
+    ) -> tuple[float | None, bool | None]:
+        """Paired significance test comparing baseline vs final per-sample scores.
+
+        Uses the Wilcoxon signed-rank test (scipy) if available, falling back to
+        a manual paired t-test otherwise. Returns (p_value, is_significant).
+
+        Returns (None, None) if there are fewer than 2 paired samples or if the
+        differences are all zero (the test is undefined).
+        """
+        import math
+
+        if not baseline.samples or not final.samples:
+            return None, None
+
+        n = min(len(baseline.samples), len(final.samples))
+        if n < 2:
+            return None, None
+
+        b_scores = [s.score for s in baseline.samples[:n]]
+        f_scores = [s.score for s in final.samples[:n]]
+        diffs = [f - b for f, b in zip(f_scores, b_scores)]
+
+        # All identical — test undefined
+        if all(d == 0.0 for d in diffs):
+            return None, None
+
+        # --- Try scipy Wilcoxon signed-rank test (non-parametric, no normality assumption) ---
+        try:
+            from scipy.stats import wilcoxon  # type: ignore[import]
+            _, p_value = wilcoxon(b_scores, f_scores)
+            return float(p_value), bool(p_value < 0.05)
+        except ImportError:
+            pass
+
+        # --- Fallback: manual paired t-test ---
+        mean_d = sum(diffs) / n
+        var_d = sum((d - mean_d) ** 2 for d in diffs) / (n - 1) if n > 1 else 0.0
+        if var_d == 0.0:
+            return None, None
+        t_stat = mean_d / math.sqrt(var_d / n)
+
+        # Approximate two-tailed p-value from t-distribution (Abramowitz & Stegun 26.7.8)
+        # degrees of freedom = n - 1
+        df = n - 1
+        x = df / (df + t_stat ** 2)
+        # Regularized incomplete beta function approximation for small df
+        # For df >= 2 this is accurate to ~1%
+        p_approx = _beta_inc_approx(x, df / 2, 0.5)
+        return float(p_approx), bool(p_approx < 0.05)
+
+
+def _beta_inc_approx(x: float, a: float, b: float) -> float:  # noqa: N802
+    """Rough two-tailed p-value via continued-fraction incomplete-beta approximation.
+
+    Only used when scipy is not installed. Accurate to ~±0.01 for df >= 2.
+    """
+    import math
+
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+
+    # Log of the beta function B(a, b)
+    log_beta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+
+    # Continued-fraction expansion (Lentz's method, 40 terms)
+    def _cf(x: float, a: float, b: float) -> float:
+        qab = a + b
+        qap = a + 1.0
+        qam = a - 1.0
+        c, d = 1.0, 1.0 - qab * x / qap
+        if abs(d) < 1e-30:
+            d = 1e-30
+        d = 1.0 / d
+        h = d
+        for m in range(1, 41):
+            m2 = 2 * m
+            aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+            d = 1.0 + aa * d
+            if abs(d) < 1e-30:
+                d = 1e-30
+            c = 1.0 + aa / c
+            if abs(c) < 1e-30:
+                c = 1e-30
+            d = 1.0 / d
+            h *= d * c
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+            d = 1.0 + aa * d
+            if abs(d) < 1e-30:
+                d = 1e-30
+            c = 1.0 + aa / c
+            if abs(c) < 1e-30:
+                c = 1e-30
+            d = 1.0 / d
+            delta = d * c
+            h *= delta
+            if abs(delta - 1.0) < 1e-7:
+                break
+        return h
+
+    bt = math.exp(math.log(x) * a + math.log(1.0 - x) * b - log_beta)
+    # Use symmetry relation for better convergence
+    if x < (a + 1.0) / (a + b + 2.0):
+        ibeta = bt * _cf(x, a, b) / a
+    else:
+        ibeta = 1.0 - bt * _cf(1.0 - x, b, a) / b
+
+    # Two-tailed p-value
+    return float(min(2.0 * ibeta, 1.0))

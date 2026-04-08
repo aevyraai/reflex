@@ -18,6 +18,8 @@ iteration history, and analysis.
 | `converged` | `bool` | Whether the score threshold was reached |
 | `baseline` | `EvalSnapshot \| None` | Baseline eval snapshot |
 | `final` | `EvalSnapshot \| None` | Final verification snapshot |
+| `p_value` | `float \| None` | p-value from paired significance test (Wilcoxon or t-test). `None` if fewer than 2 samples or scipy not installed |
+| `is_significant` | `bool \| None` | `True` if `p_value < 0.05`. `None` when `p_value` is unavailable |
 | `total_eval_tokens` | `int` | Total tokens used by the eval model across the run |
 | `total_reasoning_tokens` | `int` | Total tokens used by the reasoning model across the run |
 | `strategy_name` | `str` | Strategy that was used |
@@ -89,10 +91,12 @@ Scores from a single eval run (baseline or final).
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `mean_score` | `float` | Mean score across all samples |
+| `mean_score` | `float` | Mean score across all samples (and across runs when `eval_runs > 1`) |
+| `std_score` | `float` | Std dev of per-run mean scores. `0.0` when `eval_runs=1` |
+| `n_runs` | `int` | Number of eval passes averaged to produce `mean_score`. `1` by default |
 | `scores_by_metric` | `dict[str, float]` | Per-metric mean scores |
 | `system_prompt` | `str` | The system prompt used |
-| `samples` | `list[SampleSnapshot]` | Per-sample results |
+| `samples` | `list[SampleSnapshot]` | Per-sample results (scores averaged across runs when `eval_runs > 1`) |
 | `total_tokens` | `int` | Total tokens used by the eval model in this snapshot |
 
 ## SampleSnapshot

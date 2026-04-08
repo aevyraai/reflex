@@ -81,6 +81,7 @@ config = OptimizerConfig(
     max_iterations=10,           # total iteration budget
     score_threshold=0.85,        # stop when score reaches this
     max_workers=4,               # parallel workers for variant evaluation
+    eval_runs=1,                 # eval passes to average (1 = single pass)
     reasoning_model="claude-sonnet-4-20250514",
     eval_temperature=0.0,        # temperature for target model completions
     extra_kwargs={},             # strategy-specific parameters
@@ -93,6 +94,7 @@ config = OptimizerConfig(
 | `max_iterations` | `10` | Maximum iterations (total budget for auto across all phases) |
 | `score_threshold` | `0.85` | Target score — optimization stops when reached. Set automatically by `--target` or `--verdict-results` |
 | `max_workers` | `4` | Thread pool size for parallel evaluation |
+| `eval_runs` | `1` | Number of eval passes to run and average for the baseline and final verification. Use 3–5 for noisy tasks or small datasets. Does not affect optimization iterations |
 | `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
 | `reasoning_provider` | `None` | Provider for the reasoning model: `"anthropic"`, `"openai"`, `"ollama"`, or an alias. Auto-detected from model name if `None` |
 | `reasoning_api_key` | `None` | API key for the reasoning model. Falls back to the provider's default env var |
@@ -102,6 +104,52 @@ config = OptimizerConfig(
 | `target_source` | `None` | How the target was set: `"verdict_json"`, `"verdict_run"`, or `"manual"` |
 | `source_model` | `None` | The model family this prompt was originally written for (e.g. `"claude-sonnet"`, `"gpt-4o"`). Enables migration mode — the reasoning model adapts idioms for the target model. Also set via `--source-model` |
 | `extra_kwargs` | `{}` | Strategy-specific parameters (see below) |
+
+## Statistical significance
+
+Reflex reports whether the improvement from baseline to final is statistically
+significant using a **paired test on per-sample scores**. This compares how
+each individual sample scored under the original prompt vs the optimized one.
+
+The result appears in `result.summary()`:
+
+```
+  Baseline score   : 0.6200
+  Final score      : 0.7450
+  Improvement      : +0.1250 (+20.2%)
+  Significance     : p=0.0234  ✓ significant (α=0.05, paired test)
+```
+
+The test uses the Wilcoxon signed-rank test (non-parametric, no normality
+assumption) if scipy is installed, and falls back to a paired t-test otherwise.
+Install scipy for best results:
+
+```bash
+pip install scipy
+```
+
+For **noisy tasks** where LLM responses vary run-to-run, use `--eval-runs` to
+average multiple passes before computing the test:
+
+```bash
+# Average 3 eval passes for baseline and final, then test significance
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --eval-runs 3
+```
+
+This reports `mean ± std` in the results summary:
+
+```
+  Baseline score   : 0.6200 ± 0.0180  (3 runs)
+  Final score      : 0.7450 ± 0.0120  (3 runs)
+```
+
+<Note>
+  `--eval-runs` only affects the baseline and final verification evals — not
+  the optimization iterations, which always use a single pass for speed.
+  `--eval-runs 3` triples the cost of those two checkpoints.
+</Note>
 
 ## Strategy-specific parameters
 

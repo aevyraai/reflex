@@ -15,6 +15,7 @@ config = OptimizerConfig(
     max_iterations=10,
     score_threshold=0.85,
     max_workers=4,
+    eval_runs=1,                   # eval passes to average (1 = single pass)
     reasoning_model="claude-sonnet-4-20250514",
     reasoning_provider=None,       # "anthropic", "openai", "ollama", or alias
     reasoning_api_key=None,        # defaults to provider's env var
@@ -32,6 +33,7 @@ config = OptimizerConfig(
 | `max_iterations` | `int` | `10` | Maximum optimization iterations |
 | `score_threshold` | `float` | `0.85` | Target score for convergence |
 | `max_workers` | `int` | `4` | Thread pool size for parallel evaluation |
+| `eval_runs` | `int` | `1` | Eval passes to average for baseline and final verification. Reports `mean ± std` and tests significance |
 | `reasoning_model` | `str` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
 | `reasoning_provider` | `str \| None` | `None` | Provider: `"anthropic"`, `"openai"`, `"ollama"`, or an alias. Auto-detected from model name if `None` |
 | `reasoning_api_key` | `str \| None` | `None` | API key for the reasoning model |

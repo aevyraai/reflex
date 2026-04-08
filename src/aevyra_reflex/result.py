@@ -54,6 +54,8 @@ class EvalSnapshot:
     system_prompt: str = ""
     samples: list[SampleSnapshot] = field(default_factory=list)
     total_tokens: int = 0
+    std_score: float = 0.0   # std dev of mean scores across eval_runs (0 when eval_runs=1)
+    n_runs: int = 1          # number of eval passes averaged to produce mean_score
 
 
 @dataclass
@@ -72,6 +74,10 @@ class OptimizationResult:
     # Token usage (filled by optimizer)
     total_eval_tokens: int = 0       # all eval-model tokens across the run
     total_reasoning_tokens: int = 0  # all reasoning-model tokens across the run
+
+    # Statistical significance (filled by optimizer after run)
+    p_value: float | None = None        # p-value from paired Wilcoxon/t-test (None if n < 2 or scipy missing)
+    is_significant: bool | None = None  # True if p_value < 0.05
 
     # Strategy metadata (filled by auto strategy or optimizer)
     strategy_name: str = ""
@@ -103,12 +109,27 @@ class OptimizationResult:
             pct = self.improvement_pct or 0
             sign = "+" if imp >= 0 else ""
 
+            def _fmt_score(snap: "EvalSnapshot") -> str:
+                s = f"{snap.mean_score:.4f}"
+                if snap.std_score > 0:
+                    s += f" ± {snap.std_score:.4f}"
+                if snap.n_runs > 1:
+                    s += f"  ({snap.n_runs} runs)"
+                return s
+
             lines.append("=" * 52)
             lines.append("  OPTIMIZATION RESULTS")
             lines.append("=" * 52)
-            lines.append(f"  Baseline score   : {self.baseline.mean_score:.4f}")
-            lines.append(f"  Final score      : {self.final.mean_score:.4f}")
+            lines.append(f"  Baseline score   : {_fmt_score(self.baseline)}")
+            lines.append(f"  Final score      : {_fmt_score(self.final)}")
             lines.append(f"  Improvement      : {sign}{imp:.4f} ({sign}{pct:.1f}%)")
+            if self.p_value is not None:
+                sig_mark = "✓ significant" if self.is_significant else "✗ not significant"
+                lines.append(f"  Significance     : p={self.p_value:.4f}  {sig_mark} (α=0.05, paired test)")
+            elif self.baseline.samples and len(self.baseline.samples) < 2:
+                lines.append("  Significance     : n/a (need ≥2 samples)")
+            else:
+                lines.append("  Significance     : install scipy for p-values")
             lines.append(f"  Iterations       : {len(self.iterations)}")
             lines.append(f"  Converged        : {self.converged}")
             if self.total_eval_tokens or self.total_reasoning_tokens:
@@ -601,6 +622,8 @@ class OptimizationResult:
         if self.baseline:
             d["baseline"] = {
                 "mean_score": self.baseline.mean_score,
+                "std_score": self.baseline.std_score,
+                "n_runs": self.baseline.n_runs,
                 "scores_by_metric": self.baseline.scores_by_metric,
                 "system_prompt": self.baseline.system_prompt,
                 "total_tokens": self.baseline.total_tokens,
@@ -608,6 +631,8 @@ class OptimizationResult:
         if self.final:
             d["final"] = {
                 "mean_score": self.final.mean_score,
+                "std_score": self.final.std_score,
+                "n_runs": self.final.n_runs,
                 "scores_by_metric": self.final.scores_by_metric,
                 "system_prompt": self.final.system_prompt,
                 "total_tokens": self.final.total_tokens,
@@ -615,6 +640,9 @@ class OptimizationResult:
         if self.improvement is not None:
             d["improvement"] = self.improvement
             d["improvement_pct"] = self.improvement_pct
+        if self.p_value is not None:
+            d["p_value"] = self.p_value
+            d["is_significant"] = self.is_significant
         if self.strategy_name:
             d["strategy_name"] = self.strategy_name
         if self.phase_history:
