@@ -41,6 +41,7 @@ config = OptimizerConfig(
 | `eval_temperature` | `float` | `0.0` | Temperature for target model |
 | `target_model` | `str \| None` | `None` | Label of the model whose score is the target (set by verdict integration) |
 | `target_source` | `str \| None` | `None` | How the target was set: `"verdict_json"`, `"verdict_run"`, or `"manual"` |
+| `source_model` | `str \| None` | `None` | The model family this prompt was originally written for (e.g. `"claude-sonnet"`, `"gpt-4o"`). Enables migration mode — the reasoning model adapts idioms for the target model |
 | `extra_kwargs` | `dict` | `{}` | Strategy-specific parameters |
 
 ## PromptOptimizer

@@ -93,8 +93,9 @@ Scores from a single eval run (baseline or final).
 |----------|------|-------------|
 | `mean_score` | `float` | Mean score across all samples |
 | `scores_by_metric` | `dict[str, float]` | Per-metric mean scores |
-| `system_prompt` | `str \| None` | The system prompt used |
+| `system_prompt` | `str` | The system prompt used |
 | `samples` | `list[SampleSnapshot]` | Per-sample results |
+| `total_tokens` | `int` | Total tokens used by the eval model in this snapshot |
 
 ## SampleSnapshot
 

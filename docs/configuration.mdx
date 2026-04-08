@@ -102,6 +102,7 @@ config = OptimizerConfig(
 | `eval_temperature` | `0.0` | Temperature for target model completions |
 | `target_model` | `None` | Label of the model whose score is the target (set automatically) |
 | `target_source` | `None` | How the target was set: `"verdict_json"`, `"verdict_run"`, or `"manual"` |
+| `source_model` | `None` | The model family this prompt was originally written for (e.g. `"claude-sonnet"`, `"gpt-4o"`). Enables migration mode — the reasoning model adapts idioms for the target model. Also set via `--source-model` |
 | `extra_kwargs` | `{}` | Strategy-specific parameters (see below) |
 
 ## Train/test split

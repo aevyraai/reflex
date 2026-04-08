@@ -578,16 +578,19 @@ class LLM:
         failing_samples: list[dict[str, Any]],
         analysis: str,
         score_trajectory: list[float] | None = None,
+        structural_history: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate a free-form structural improvement guided by failure analysis."""
         from aevyra_reflex.prompts import FREEFORM_RESTRUCTURE_PROMPT
 
         samples_text = _format_failing_samples(failing_samples)
         trajectory_str = " → ".join(f"{s:.3f}" for s in (score_trajectory or []))
+        history_text = _format_structural_history(structural_history or [])
 
         prompt = FREEFORM_RESTRUCTURE_PROMPT.format(
             current_prompt=current_prompt,
             score_trajectory=trajectory_str or "(first iteration)",
+            structural_history=history_text,
             analysis=analysis,
             failing_samples=samples_text,
         )
@@ -749,16 +752,21 @@ def _format_current_examples(examples: list[dict[str, str]]) -> str:
 
 
 def _format_structural_history(history: list[dict[str, Any]]) -> str:
-    """Format structural experiment history for context."""
+    """Format structural experiment history for context, with outcome labels."""
     if not history:
-        return "(no previous experiments)"
+        return "(no previous experiments — this is the first round)"
     lines = []
     for h in history:
+        score_before = h.get("score_before", 0.0)
+        score_after = h.get("score_after", 0.0)
+        delta = score_after - score_before
+        sign = "+" if delta >= 0 else ""
+        effect = "✓ helped" if delta > 0.005 else ("✗ no effect" if abs(delta) <= 0.005 else "✗ hurt")
+        best = h.get("best_transform", "?")
         transforms = ", ".join(h.get("transforms_tried", []))
         lines.append(
-            f"Iteration {h['iteration']}: tried [{transforms}], "
-            f"best={h.get('best_transform', '?')} "
-            f"({h.get('score_before', 0):.3f} → {h.get('score_after', 0):.3f})"
+            f"Iter {h['iteration']} (score: {score_after:.4f}, Δ{sign}{delta:.4f} — {effect}): "
+            f"winner={best}  tried=[{transforms}]"
         )
     return "\n".join(lines)
 
