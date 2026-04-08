@@ -110,6 +110,8 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             else:
                 reasoning_model = reasoning_raw
 
+        source_model = config_dict.get("source_model", "").strip() or None
+
         config = OptimizerConfig(
             strategy=strategy,
             max_iterations=max_iterations,
@@ -118,6 +120,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             reasoning_provider=reasoning_provider,
             target_model=target_model_label,
             target_source=target_source or ("manual" if not verdict_path and not target_models else None),
+            source_model=source_model,
         )
 
         # ── Load dataset ──────────────────────────────────────────────────
@@ -235,6 +238,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
                 reasoning=getattr(record, "reasoning", ""),
                 eval_tokens=getattr(record, "eval_tokens", 0),
                 reasoning_tokens=getattr(record, "reasoning_tokens", 0),
+                change_summary=getattr(record, "change_summary", ""),
             )
 
         result = optimizer.run(
@@ -382,6 +386,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     "system_prompt": it.system_prompt,
                     "eval_tokens": it.eval_tokens,
                     "reasoning_tokens": it.reasoning_tokens,
+                    "change_summary": getattr(it, "change_summary", ""),
                     "timestamp": it.timestamp,
                 }
                 for it in iterations
