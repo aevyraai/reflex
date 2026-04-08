@@ -358,7 +358,7 @@ Explore your runs visually with the built-in web dashboard:
 aevyra-reflex dashboard
 ```
 
-Opens a local web UI at `http://localhost:7430` showing all your runs with
+Opens a local web UI at `http://localhost:8128` showing all your runs with
 score trajectory charts, prompt diffs between iterations, reasoning analysis,
 and config snapshots. Click into any run to drill down into individual
 iterations and see exactly what the reasoning model changed and why.
