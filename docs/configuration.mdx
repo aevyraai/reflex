@@ -80,6 +80,7 @@ config = OptimizerConfig(
     strategy="auto",             # auto, iterative, structural, pdo, fewshot
     max_iterations=10,           # total iteration budget
     score_threshold=0.85,        # stop when score reaches this
+    train_ratio=0.8,             # 80% train / 20% held-out test
     max_workers=4,               # parallel workers for variant evaluation
     reasoning_model="claude-sonnet-4-20250514",
     eval_temperature=0.0,        # temperature for target model completions
@@ -92,6 +93,7 @@ config = OptimizerConfig(
 | `strategy` | `"auto"` | Which optimization strategy to use (or any custom registered name) |
 | `max_iterations` | `10` | Maximum iterations (total budget for auto across all phases) |
 | `score_threshold` | `0.85` | Target score — optimization stops when reached. Set automatically by `--target` or `--verdict-results` |
+| `train_ratio` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
 | `max_workers` | `4` | Thread pool size for parallel evaluation |
 | `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
 | `reasoning_provider` | `None` | Provider for the reasoning model: `"anthropic"`, `"openai"`, `"ollama"`, or an alias. Auto-detected from model name if `None` |
@@ -101,6 +103,39 @@ config = OptimizerConfig(
 | `target_model` | `None` | Label of the model whose score is the target (set automatically) |
 | `target_source` | `None` | How the target was set: `"verdict_json"`, `"verdict_run"`, or `"manual"` |
 | `extra_kwargs` | `{}` | Strategy-specific parameters (see below) |
+
+## Train/test split
+
+By default, reflex splits your dataset 80/20 before running. The 80% train
+set is used during the optimization loop — failing samples are drawn from
+here and all iteration scores are computed on these examples. The 20% test
+set is held out completely, and the baseline and final scores you see in the
+results summary are computed on that held-out set only.
+
+This matters because without a split, the same examples that drive rewrites
+also determine whether the prompt "improved." That inflates the reported
+improvement, especially on small datasets where a handful of examples have
+an outsized effect on the mean score.
+
+```bash
+# Default: 80/20 split (the banner shows "80 train / 20 test")
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1
+
+# Smaller test set (90/10)
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 0.9
+
+# No split — all examples used for both optimization and eval
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 1.0
+```
+
+The split is deterministic (seeded at 42) so the same dataset always
+produces the same partition.
+
+<Note>
+  With small datasets (fewer than ~20 examples), the test set may be too small
+  for stable scores. In that case, use `--train-split 1.0` to disable splitting
+  and rely on the score trajectory to judge improvement instead.
+</Note>
 
 ## Strategy-specific parameters
 

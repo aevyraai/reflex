@@ -132,6 +132,18 @@ def optimize(
         Optional[str],
         typer.Option("--resume-from", help="Resume a specific run by ID (e.g. '001') or path."),
     ] = None,
+    train_split: Annotated[
+        float,
+        typer.Option(
+            "--train-split",
+            help=(
+                "Fraction of data used for optimization (0.0–1.0). "
+                "The rest is held out for honest baseline and final eval. "
+                "Default: 0.8 (80%% train / 20%% test). "
+                "Set to 1.0 to disable splitting."
+            ),
+        ),
+    ] = 0.8,
     verbose: Annotated[
         bool,
         typer.Option("-v", "--verbose", help="Show debug output."),
@@ -221,6 +233,11 @@ def optimize(
             # No slash — treat as a bare model name (Ollama or heuristic)
             resolved_reasoning_model = reasoning_model
 
+    # Validate train_split
+    if not (0.0 < train_split <= 1.0):
+        typer.echo("Error: --train-split must be between 0.0 (exclusive) and 1.0 (inclusive).", err=True)
+        raise typer.Exit(code=1)
+
     # Build optimizer config
     config = OptimizerConfig(
         max_iterations=max_iterations,
@@ -234,6 +251,7 @@ def optimize(
         target_model=target_model_label,
         target_source=target_source,
         source_model=source_model,
+        train_ratio=train_split,
     )
     optimizer = PromptOptimizer(config=config)
     optimizer.set_dataset(ds)
@@ -295,7 +313,15 @@ def optimize(
     typer.echo("=" * 52)
     typer.echo("  aevyra-reflex")
     typer.echo("=" * 52)
-    typer.echo(f"  Dataset    : {dataset.name} ({len(ds.conversations)} samples)")
+    n_total = len(ds.conversations)
+    if 0.0 < train_split < 1.0:
+        n_train = max(1, round(n_total * train_split))
+        n_test = max(1, n_total - n_train)
+        split_display = f"{n_train} train / {n_test} test ({train_split:.0%} / {1 - train_split:.0%})"
+    else:
+        split_display = "none (full dataset)"
+    typer.echo(f"  Dataset    : {dataset.name} ({n_total} samples)")
+    typer.echo(f"  Split      : {split_display}")
     typer.echo(f"  Model(s)   : {', '.join(model)}")
     typer.echo(f"  Strategy   : {strategy}")
     typer.echo(f"  Metrics    : {metric_display}")

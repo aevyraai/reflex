@@ -226,6 +226,12 @@ class OptimizerConfig:
     samples_per_duel, initial_pool_size, thompson_alpha, mutation_frequency,
     num_top_to_mutate, max_pool_size."""
 
+    train_ratio: float = 0.8
+    """Fraction of the dataset used during optimization. The remaining examples
+    are held out as a test set and used exclusively for baseline and final eval.
+    Set to 1.0 to use the full dataset for everything (no split).
+    Default: 0.8 (80% train / 20% test)."""
+
     # --- Target from verdict ---
     target_model: str | None = None
     """Label of the model whose score we're trying to match (from verdict)."""
@@ -260,6 +266,44 @@ class PromptOptimizer:
         """Set the evaluation dataset (a verdict Dataset instance)."""
         self._dataset = dataset
         return self
+
+    @staticmethod
+    def _split_dataset(dataset: Any, train_ratio: float, seed: int = 42) -> tuple[Any, Any]:
+        """Split a verdict Dataset into train and test subsets.
+
+        Uses a deterministic shuffle so the same dataset always produces the
+        same split. The test set is never seen by the optimization strategy —
+        it is used only for baseline and final verification scores.
+
+        Args:
+            dataset: A verdict Dataset instance with a .conversations list.
+            train_ratio: Fraction of examples to use for training (0 < ratio < 1).
+            seed: Random seed for reproducibility (default 42).
+
+        Returns:
+            (train_dataset, test_dataset) tuple.
+        """
+        import random
+        from aevyra_verdict.dataset import Dataset
+
+        convos = list(dataset.conversations)
+        n = len(convos)
+        n_train = max(1, round(n * train_ratio))
+        n_test = max(1, n - n_train)
+
+        # Cap n_train so there's always at least 1 test example
+        if n_train + n_test > n:
+            n_train = n - n_test
+
+        rng = random.Random(seed)
+        indices = list(range(n))
+        rng.shuffle(indices)
+
+        train_indices = set(indices[:n_train])
+        train_convos = [convos[i] for i in range(n) if i in train_indices]
+        test_convos = [convos[i] for i in range(n) if i not in train_indices]
+
+        return Dataset(conversations=train_convos), Dataset(conversations=test_convos)
 
     def add_provider(
         self,
@@ -456,6 +500,24 @@ class PromptOptimizer:
         # Check for Ollama and warn about parallel settings
         self._check_parallel_config()
 
+        # --- Dataset split ---
+        train_ratio = self.config.train_ratio
+        if 0.0 < train_ratio < 1.0:
+            train_dataset, test_dataset = self._split_dataset(self._dataset, train_ratio)
+            n_total = len(self._dataset.conversations)
+            n_train = len(train_dataset.conversations)
+            n_test = len(test_dataset.conversations)
+            logger.info(
+                f"Dataset split: {n_train} train / {n_test} test "
+                f"({train_ratio:.0%} / {1 - train_ratio:.0%}) — "
+                f"baseline and final scores are on the held-out test set"
+            )
+        else:
+            train_dataset = self._dataset
+            test_dataset = self._dataset
+            n_train = len(self._dataset.conversations)
+            n_test = n_train
+
         # Normalise callbacks list
         _callbacks = list(callbacks or [])
 
@@ -522,7 +584,7 @@ class PromptOptimizer:
             )
         else:
             logger.info(f"{tag} Running baseline evaluation...")
-            baseline = self._run_eval(initial_prompt)
+            baseline = self._run_eval(initial_prompt, dataset=test_dataset)
             logger.info(f"{tag} Baseline score: {baseline.mean_score:.4f}")
             if run:
                 run.save_baseline({
@@ -597,7 +659,7 @@ class PromptOptimizer:
 
         result = strategy.run(
             initial_prompt=checkpoint.current_prompt if checkpoint else initial_prompt,
-            dataset=self._dataset,
+            dataset=train_dataset,
             providers=self._providers,
             metrics=self._metrics,
             agent=llm,
@@ -606,9 +668,9 @@ class PromptOptimizer:
             **({"resume_state": checkpoint.strategy_state} if checkpoint and checkpoint.strategy_state else {}),
         )
 
-        # --- Step 3: Final verification eval ---
+        # --- Step 3: Final verification eval (on held-out test set) ---
         logger.info(f"{tag} Running final verification...")
-        final = self._run_eval(result.best_prompt)
+        final = self._run_eval(result.best_prompt, dataset=test_dataset)
         logger.info(f"{tag} Final score: {final.mean_score:.4f}  (baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})")
 
         # Attach baseline, final, and strategy info to result
@@ -619,6 +681,11 @@ class PromptOptimizer:
         result.best_score = final.mean_score
         if not result.strategy_name:
             result.strategy_name = self.config.strategy
+
+        # Record dataset split sizes (0 means no split was used)
+        if 0.0 < self.config.train_ratio < 1.0:
+            result.train_size = n_train
+            result.test_size = n_test
 
         # Accumulate token counts across all phases
         result.total_eval_tokens = (
@@ -688,15 +755,23 @@ class PromptOptimizer:
                     f"(OLLAMA_NUM_PARALLEL={num}, max_workers={self.config.max_workers})"
                 )
 
-    def _run_eval(self, prompt: str) -> EvalSnapshot:
-        """Run a full verdict eval with the given system prompt."""
+    def _run_eval(self, prompt: str, dataset: Any = None) -> EvalSnapshot:
+        """Run a full verdict eval with the given system prompt.
+
+        Args:
+            prompt: The system prompt to evaluate.
+            dataset: Dataset to evaluate on. Defaults to self._dataset.
+                     Pass the test split here to get honest held-out scores.
+        """
         from aevyra_verdict import EvalRunner
         from aevyra_verdict.dataset import Conversation, Dataset, Message
         from aevyra_verdict.runner import RunConfig
 
+        eval_dataset = dataset if dataset is not None else self._dataset
+
         # Inject system prompt
         injected = []
-        for convo in self._dataset.conversations:
+        for convo in eval_dataset.conversations:
             messages = list(convo.messages)
             if messages and messages[0].role == "system":
                 messages[0] = Message(role="system", content=prompt)
