@@ -235,6 +235,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
                 reasoning=getattr(record, "reasoning", ""),
                 eval_tokens=getattr(record, "eval_tokens", 0),
                 reasoning_tokens=getattr(record, "reasoning_tokens", 0),
+                change_summary=getattr(record, "change_summary", ""),
             )
 
         result = optimizer.run(
@@ -382,6 +383,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     "system_prompt": it.system_prompt,
                     "eval_tokens": it.eval_tokens,
                     "reasoning_tokens": it.reasoning_tokens,
+                    "change_summary": getattr(it, "change_summary", ""),
                     "timestamp": it.timestamp,
                 }
                 for it in iterations

@@ -75,6 +75,11 @@ Return your response in this exact format:
 2. [pattern]: [explanation]
 3. [pattern]: [explanation]
 
+## Summary of change
+[One sentence describing the most important change you made, e.g. \
+"Added numbered reasoning steps to address structure failures" or \
+"Made output format explicit with a JSON example to fix formatting errors"]
+
 ## Revised prompt
 [Your complete revised system prompt here — the full text, not a diff]
 """
@@ -89,6 +94,11 @@ to improve eval scores. Here's where things stand:
 ## Score trajectory
 {score_trajectory}
 
+## Rewrite history
+What you tried in previous iterations and what effect each change had:
+
+{rewrite_history}
+
 ## Current eval results
 Mean score: {mean_score:.4f} (target: {target_score:.4f})
 
@@ -99,9 +109,14 @@ Mean score: {mean_score:.4f} (target: {target_score:.4f})
 {previous_reasoning}
 
 ## Your task
-The score has {improved_text} since last iteration. \
-Analyze why, then propose a revised prompt. Be surgical — don't change what's \
-working. Focus on the remaining failure modes.
+The score has {improved_text} since last iteration. Use the rewrite history \
+above to understand which changes helped and which didn't — don't repeat \
+approaches that had negligible effect. Be surgical: build on what worked, \
+address the remaining failure modes differently.
+
+## Summary of change
+[One sentence describing the most important change you made, e.g. \
+"Replaced XML tags with Markdown headers to improve structure clarity"]
 
 ## Revised prompt
 [Your complete revised system prompt — the full text, not a diff]

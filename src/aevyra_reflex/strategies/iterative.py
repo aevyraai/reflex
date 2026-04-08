@@ -54,6 +54,7 @@ class IterativeStrategy(Strategy):
         current_prompt = initial_prompt
         iterations: list[IterationRecord] = []
         previous_reasoning = ""
+        rewrite_log: list[dict] = []  # causal history: what was tried and what happened
 
         run_config = RunConfig(
             temperature=config.eval_temperature,
@@ -102,12 +103,12 @@ class IterativeStrategy(Strategy):
             # 4. Ask Claude to diagnose and revise
             reasoning_before = getattr(agent, "tokens_used", 0)
             if i == 0:
-                revised, reasoning = agent.diagnose_and_revise(
+                revised, reasoning, change_summary = agent.diagnose_and_revise(
                     system_prompt=current_prompt,
                     failing_samples=failing_samples,
                 )
             else:
-                revised, reasoning = agent.refine(
+                revised, reasoning, change_summary = agent.refine(
                     system_prompt=current_prompt,
                     iteration=i + 1,
                     score_trajectory=trajectory,
@@ -115,12 +116,25 @@ class IterativeStrategy(Strategy):
                     target_score=config.score_threshold,
                     failing_samples=failing_samples,
                     previous_reasoning=previous_reasoning,
+                    rewrite_log=rewrite_log,
                 )
             record.reasoning_tokens = getattr(agent, "tokens_used", 0) - reasoning_before
+            record.change_summary = change_summary
+
+            # Update the causal rewrite log with this iteration's outcome
+            prev_score = iterations[-2].score if len(iterations) >= 2 else score
+            rewrite_log.append({
+                "iteration": i + 1,
+                "score": score,
+                "delta": score - prev_score,
+                "change_summary": change_summary,
+            })
 
             previous_reasoning = reasoning
             current_prompt = revised
             logger.info(f"  Revised prompt length: {len(revised)} chars")
+            if change_summary:
+                logger.info(f"  Change: {change_summary}")
 
         # Exhausted max_iterations
         best = max(iterations, key=lambda r: r.score)
