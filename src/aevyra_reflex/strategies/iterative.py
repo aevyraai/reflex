@@ -62,10 +62,12 @@ class IterativeStrategy(Strategy):
         )
 
         for i in range(config.max_iterations):
-            logger.info(f"Iteration {i + 1}/{config.max_iterations}")
+            tag = f"[iterative][iter {i + 1}/{config.max_iterations}]"
+            logger.info(f"{tag} Starting")
 
             # 1. Run eval with current prompt
             reasoning_before = getattr(agent, "tokens_used", 0)
+            logger.info(f"{tag} Running eval...")
             score, failing_samples, eval_tokens = _run_eval(
                 prompt=current_prompt,
                 dataset=dataset,
@@ -88,11 +90,11 @@ class IterativeStrategy(Strategy):
                 on_iteration(record)
 
             trajectory = [r.score for r in iterations]
-            logger.info(f"  Score: {score:.4f} (target: {config.score_threshold:.4f})")
+            logger.info(f"{tag} Score: {score:.4f}  target: {config.score_threshold:.4f}  failing samples: {len(failing_samples)}")
 
             # 3. Check convergence
             if score >= config.score_threshold:
-                logger.info("Score threshold met — stopping.")
+                logger.info(f"{tag} Score threshold met — stopping.")
                 return OptimizationResult(
                     best_prompt=current_prompt,
                     best_score=score,
@@ -100,14 +102,16 @@ class IterativeStrategy(Strategy):
                     converged=True,
                 )
 
-            # 4. Ask Claude to diagnose and revise
+            # 4. Ask reasoning model to diagnose and revise
             reasoning_before = getattr(agent, "tokens_used", 0)
             if i == 0:
+                logger.info(f"{tag} Diagnosing failures (first iteration)...")
                 revised, reasoning, change_summary = agent.diagnose_and_revise(
                     system_prompt=current_prompt,
                     failing_samples=failing_samples,
                 )
             else:
+                logger.info(f"{tag} Refining prompt (rewrite log: {len(rewrite_log)} entries)...")
                 revised, reasoning, change_summary = agent.refine(
                     system_prompt=current_prompt,
                     iteration=i + 1,
@@ -123,18 +127,19 @@ class IterativeStrategy(Strategy):
 
             # Update the causal rewrite log with this iteration's outcome
             prev_score = iterations[-2].score if len(iterations) >= 2 else score
+            delta = score - prev_score
             rewrite_log.append({
                 "iteration": i + 1,
                 "score": score,
-                "delta": score - prev_score,
+                "delta": delta,
                 "change_summary": change_summary,
             })
 
             previous_reasoning = reasoning
             current_prompt = revised
-            logger.info(f"  Revised prompt length: {len(revised)} chars")
+            logger.info(f"{tag} Revised prompt: {len(revised)} chars")
             if change_summary:
-                logger.info(f"  Change: {change_summary}")
+                logger.info(f"{tag} Change: {change_summary}")
 
         # Exhausted max_iterations
         best = max(iterations, key=lambda r: r.score)
