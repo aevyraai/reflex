@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass, field
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 
@@ -64,16 +63,9 @@ class TestSplitDataset(unittest.TestCase):
 
     def _split(self, n, ratio, seed=42):
         """Helper: run the split and return (train, test) as plain lists."""
-        from aevyra_reflex.optimizer import PromptOptimizer
-
         dataset = _make_dataset(n)
 
-        # Patch the Dataset import inside _split_dataset
-        with patch("aevyra_reflex.optimizer.PromptOptimizer._split_dataset") as _mock:
-            # Call the real static method directly
-            pass
-
-        # Call the real static method directly by importing it
+        # Inline reimplementation (avoids aevyra_verdict import in CI)
         import random
         convos = list(dataset.conversations)
         n_total = len(convos)

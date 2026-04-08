@@ -504,7 +504,6 @@ class PromptOptimizer:
         train_ratio = self.config.train_ratio
         if 0.0 < train_ratio < 1.0:
             train_dataset, test_dataset = self._split_dataset(self._dataset, train_ratio)
-            n_total = len(self._dataset.conversations)
             n_train = len(train_dataset.conversations)
             n_test = len(test_dataset.conversations)
             logger.info(
