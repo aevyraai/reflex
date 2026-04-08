@@ -314,7 +314,7 @@ Install scipy for the Wilcoxon test (recommended); the t-test fallback works
 without it:
 
 ```bash
-pip install scipy
+pip install "aevyra-reflex[stats]"
 ```
 
 ## Choosing a reasoning model
