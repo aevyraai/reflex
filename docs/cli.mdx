@@ -35,6 +35,7 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `--reasoning-model` | `claude-sonnet-4-20250514` | LLM for reasoning in `provider/model` format. Supports `ollama/`, `openai/`, `openrouter/`, etc. |
 | `--reasoning-api-key` | — | API key for the reasoning model. Also reads `REFLEX_REASONING_API_KEY` env var |
 | `--reasoning-base-url` | — | Base URL for self-hosted reasoning model endpoints |
+| `--source-model` | — | The model family this prompt was originally written for (e.g. `claude-sonnet`, `gpt-4o`). Enables migration mode — the reasoning model adapts idioms (XML tags → Markdown, role framing, etc.) for the target model |
 | `-o`, `--output` | — | Save the optimized prompt to this file |
 | `--results-json` | — | Save full results (iterations, scores, analysis) to JSON |
 | `--run-dir` | `.reflex/` | Directory for run history and checkpoints |

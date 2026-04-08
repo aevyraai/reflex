@@ -1334,6 +1334,23 @@ function renderNewRun() {
         itersInput
       )
     ),
+    el('div', { class: 'form-group', style: { marginTop: '16px' } },
+      el('label', { class: 'form-label' }, 'Source Model', el('span', null, 'optional — for migration mode')),
+      el('input', { class: 'form-input', type: 'text', placeholder: 'e.g. claude-sonnet, gpt-4o, llama3', id: 'source-model-input',
+        onInput: (e) => {
+          const v = e.target.value.trim();
+          let hint = e.target.nextSibling;
+          if (!hint || !hint.classList.contains('form-hint')) {
+            hint = el('div', { class: 'form-hint', style: { marginTop: '5px' } });
+            e.target.insertAdjacentElement('afterend', hint);
+          }
+          hint.style.display = v ? 'block' : 'none';
+          hint.textContent = v
+            ? `Migration mode — the reasoning model will adapt idioms from ${v} to the target model`
+            : '';
+        }
+      })
+    ),
     el('div', { class: 'form-row', style: { marginTop: '16px' } },
       threshGroup,
       el('div', { class: 'form-group', style: { marginBottom: '0' } },
@@ -1410,6 +1427,7 @@ function renderNewRun() {
         verdict_results_path: threshMode === 'verdict' ? threshVerdictInput.value.trim() : '',
         target_models: threshMode === 'auto' ? threshAutoInput.value.split(',').map(s => s.trim()).filter(Boolean) : [],
         reasoning_model: ($('#reasoning-model-input') || {}).value || '',
+        source_model: ($('#source-model-input') || {}).value || '',
       };
       const resp = await fetch('/api/jobs/start', {
         method: 'POST',

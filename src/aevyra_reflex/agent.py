@@ -273,10 +273,12 @@ class LLM:
         provider: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        source_model: str | None = None,
     ):
         self.model = model
         self.max_tokens = max_tokens
         self.provider = provider
+        self.source_model = source_model  # original model this prompt was written for
         self.tokens_used: int = 0  # cumulative reasoning tokens across all calls
         self._backend = _resolve_agent_backend(
             model, max_tokens,
@@ -288,7 +290,15 @@ class LLM:
         logger.info(f"Reasoning model: {model} (backend: {backend_name})")
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
-        """Send a prompt to the agent and return the text response."""
+        """Send a prompt to the agent and return the text response.
+
+        If ``source_model`` was set at construction time, a migration context
+        block is prepended to every prompt so the reasoning model knows which
+        model family the prompt originated from.
+        """
+        if self.source_model:
+            from aevyra_reflex.prompts import SOURCE_MODEL_CONTEXT
+            prompt = SOURCE_MODEL_CONTEXT.format(source_model=self.source_model) + prompt
         before = getattr(self._backend, "tokens_used", 0)
         result = self._backend.generate(prompt, temperature=temperature)
         self.tokens_used += getattr(self._backend, "tokens_used", 0) - before

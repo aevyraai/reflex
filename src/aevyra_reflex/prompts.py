@@ -20,6 +20,33 @@ Two families of templates:
 """
 
 # ---------------------------------------------------------------------------
+# Source model migration context (prepended to every reasoning prompt when set)
+# ---------------------------------------------------------------------------
+
+SOURCE_MODEL_CONTEXT = """\
+## Migration context
+The system prompt being optimized was originally written for **{source_model}**. \
+You are now optimizing it for a different model family.
+
+Keep in mind the stylistic and structural conventions that differ between model \
+families — for example:
+- Claude prompts often use XML tags (<instructions>, <context>, etc.); GPT-4 and \
+Llama prompts typically use Markdown headers or plain prose instead.
+- Anthropic models respond well to explicit role framing ("You are …") at the \
+start; some open-source models prefer the instruction first.
+- Claude often follows multi-step XML structures; OpenAI models tend to do better \
+with numbered lists or clear section headers.
+- Token budgets, context windows, and instruction-following behaviour differ — \
+adjust verbosity and structure accordingly.
+
+When proposing a revised prompt, adapt any model-family-specific idioms so the \
+prompt works well on the target model.
+
+---
+
+"""
+
+# ---------------------------------------------------------------------------
 # Shared
 # ---------------------------------------------------------------------------
 

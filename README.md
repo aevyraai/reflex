@@ -242,6 +242,39 @@ aevyra-reflex runs
 Each run captures its config, dataset path, initial prompt, and per-iteration
 state, so every experiment is reproducible and comparable.
 
+## Migrating a prompt to a new model
+
+If you've written a prompt for Claude and want to optimize it for Llama or GPT-4o,
+use `--source-model` to tell reflex which model family it's migrating *from*. The
+reasoning model uses this to adapt model-family idioms automatically — XML tags to
+Markdown headers, role framing structure, verbosity adjustments, and so on:
+
+```bash
+# Migrate a Claude prompt to Llama 3.1
+aevyra-reflex optimize dataset.jsonl claude_prompt.md \
+  -m local/llama3.1 \
+  --source-model claude-sonnet \
+  -o llama_prompt.md
+
+# Migrate a GPT-4o prompt to Qwen3
+aevyra-reflex optimize dataset.jsonl gpt4o_prompt.md \
+  -m local/qwen3:8b \
+  --source-model gpt-4o \
+  -o qwen3_prompt.md
+```
+
+Or via the Python API:
+
+```python
+config = OptimizerConfig(
+    strategy="iterative",
+    source_model="claude-sonnet",   # prompt was written for this model
+)
+```
+
+Without `--source-model`, reflex still optimizes the prompt — it just won't have
+the explicit migration context to guide its rewrites.
+
 ## Choosing a reasoning model
 
 By default, reflex uses Claude Sonnet for reasoning — analyzing failures,
