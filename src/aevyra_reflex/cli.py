@@ -156,6 +156,19 @@ def optimize(
             ),
         ),
     ] = 0,
+    full_eval_steps: Annotated[
+        int,
+        typer.Option(
+            "--full-eval-steps",
+            help=(
+                "When using --batch-size, run a full training-set eval every this many iterations "
+                "to get an accurate checkpoint score. 0 (default) = never (use mini-batch scores "
+                "throughout). E.g. --batch-size 32 --full-eval-steps 5 runs a full eval on "
+                "iterations 5, 10, 15, … Full-eval iterations are marked in the dashboard. "
+                "Has no effect without --batch-size."
+            ),
+        ),
+    ] = 0,
     eval_runs: Annotated[
         int,
         typer.Option(
@@ -271,6 +284,17 @@ def optimize(
         typer.echo("Error: --batch-size must be 0 (full set) or a positive integer.", err=True)
         raise typer.Exit(code=1)
 
+    # Validate full_eval_steps
+    if full_eval_steps < 0:
+        typer.echo("Error: --full-eval-steps must be 0 or a positive integer.", err=True)
+        raise typer.Exit(code=1)
+    if full_eval_steps > 0 and batch_size == 0:
+        typer.echo(
+            "Warning: --full-eval-steps has no effect without --batch-size "
+            "(already evaluating the full set every iteration).",
+            err=True,
+        )
+
     config = OptimizerConfig(
         max_iterations=max_iterations,
         score_threshold=effective_threshold,
@@ -286,6 +310,7 @@ def optimize(
         source_model=source_model,
         train_ratio=train_split,
         batch_size=batch_size,
+        full_eval_steps=full_eval_steps,
     )
     optimizer = PromptOptimizer(config=config)
     optimizer.set_dataset(ds)
@@ -366,7 +391,10 @@ def optimize(
     typer.echo(f"  Target     : {threshold_display}")
     typer.echo(f"  Workers    : {max_workers}")
     if batch_size > 0:
-        typer.echo(f"  Batch size : {batch_size} examples/iter  (mini-batch mode)")
+        if full_eval_steps > 0:
+            typer.echo(f"  Batch size : {batch_size} examples/iter  (full eval every {full_eval_steps} iters)")
+        else:
+            typer.echo(f"  Batch size : {batch_size} examples/iter  (mini-batch mode)")
     if eval_runs > 1:
         typer.echo(f"  Eval runs  : {eval_runs}×  (baseline + final averaged over {eval_runs} passes)")
     typer.echo("=" * 52)

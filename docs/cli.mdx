@@ -42,6 +42,7 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `--run-dir` | `.reflex/` | Directory for run history and checkpoints |
 | `--train-split` | `0.8` | Fraction of data used for optimization. The rest is held out for baseline and final eval scores. Set to `1.0` to disable splitting |
 | `--batch-size` | `0` | Mini-batch size for each optimization iteration. `0` = full training set. When > 0, each iteration samples this many examples at random. Baseline and final evals are unaffected |
+| `--full-eval-steps` | `0` | When using `--batch-size`, run a full training-set eval every N iterations. `0` = never. E.g. `--batch-size 32 --full-eval-steps 5` gives accurate checkpoint scores on iters 5, 10, 15, … Full-eval iters are marked in the dashboard |
 | `--resume` | `false` | Resume the latest interrupted run for this dataset |
 | `--resume-from` | — | Resume a specific run by ID (e.g. `001`) or directory path |
 | `-v`, `--verbose` | `false` | Show detailed logs including timing |

@@ -60,13 +60,27 @@ class IterativeStrategy(Strategy):
             max_tokens=config.max_tokens,
         )
 
+        _batch_size = getattr(config, "batch_size", 0)
+        _batch_seed = getattr(config, "batch_seed", 42)
+        _full_eval_steps = getattr(config, "full_eval_steps", 0)
+
         for i in range(config.max_iterations):
             tag = f"[iterative][iter {i + 1}/{config.max_iterations}]"
             logger.info(f"{tag} Starting")
 
+            # Determine whether this iteration should use the full training set
+            # (periodic full-eval checkpoint) or a mini-batch sample.
+            is_full_eval = (
+                _batch_size > 0
+                and _full_eval_steps > 0
+                and (i + 1) % _full_eval_steps == 0
+            )
+            effective_batch = 0 if is_full_eval else _batch_size
+
             # 1. Run eval with current prompt
             reasoning_before = getattr(agent, "tokens_used", 0)
-            logger.info(f"{tag} Running eval...")
+            eval_label = "full-eval checkpoint" if is_full_eval else "eval"
+            logger.info(f"{tag} Running {eval_label}...")
             score, failing_samples, eval_tokens = _run_eval(
                 prompt=current_prompt,
                 dataset=dataset,
@@ -74,8 +88,8 @@ class IterativeStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=config.extra_kwargs.get("bottom_k", 10),
-                batch_size=getattr(config, "batch_size", 0),
-                iteration_seed=getattr(config, "batch_seed", 42) + i,
+                batch_size=effective_batch,
+                iteration_seed=_batch_seed + i,
             )
 
             # 2. Record this iteration
@@ -85,6 +99,7 @@ class IterativeStrategy(Strategy):
                 score=score,
                 reasoning=previous_reasoning,
                 eval_tokens=eval_tokens,
+                is_full_eval=is_full_eval,
             )
             iterations.append(record)
             if on_iteration:

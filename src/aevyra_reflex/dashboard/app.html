@@ -726,11 +726,15 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
       const isBest = bestScore != null && Math.abs(it.score - bestScore) < 0.0001;
       const dc = delta == null ? color : delta > 0.0005 ? '#00cc77' : delta < -0.0005 ? '#ff4455' : '#888';
 
-      const card = el('div', { class: 'flow-node-card', style: 'box-sizing:border-box;padding:10px 14px' });
+      const isFullEval = !!it.is_full_eval;
+      const cardStyle = 'box-sizing:border-box;padding:10px 14px' +
+        (isFullEval ? ';border:1.5px solid rgba(255,210,80,0.45)' : '');
+      const card = el('div', { class: 'flow-node-card', style: cardStyle });
 
       const top = el('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:6px' });
       top.appendChild(el('span', { style: `font-family:var(--mono);font-weight:700;font-size:11px;color:${color};min-width:24px` }, '#' + it.iteration));
       top.appendChild(el('span', { style: 'font-family:var(--mono);font-size:17px;font-weight:700;color:#fff;flex:1' }, fmtScore(it.score)));
+      if (isFullEval) top.appendChild(el('span', { title: 'Full training-set eval checkpoint', style: 'font-size:10px;color:#ffd250;background:rgba(255,210,80,0.12);padding:1px 5px;border-radius:3px;flex-shrink:0' }, '◈ full eval'));
       if (delta != null) top.appendChild(el('span', { style: `font-family:var(--mono);font-size:11px;color:${dc}` }, (delta >= 0 ? '+' : '') + delta.toFixed(4)));
       if (isBest) top.appendChild(el('span', { class: 'flow-node-best' }, '★'));
 

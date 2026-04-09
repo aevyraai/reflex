@@ -99,6 +99,7 @@ config = OptimizerConfig(
 | `train_ratio` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
 | `batch_size` | `0` | Mini-batch size per iteration. `0` = full training set. When > 0, each iteration samples this many examples at random from the training data |
 | `batch_seed` | `42` | Base seed for mini-batch sampling. Iteration `i` uses `batch_seed + i` so every batch is different but the run is reproducible |
+| `full_eval_steps` | `0` | When using mini-batch mode, run a full training-set eval every this many iterations. `0` = never (use mini-batch scores throughout). E.g. `5` runs a full eval on iterations 5, 10, 15, … Full-eval iterations are marked in the dashboard |
 | `max_workers` | `4` | Thread pool size for parallel evaluation |
 | `eval_runs` | `1` | Number of eval passes to run and average for the baseline and final verification. Use 3–5 for noisy tasks or small datasets. Does not affect optimization iterations |
 | `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
@@ -161,8 +162,9 @@ aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \
 
 ```python
 config = OptimizerConfig(
-    batch_size=32,   # examples per iteration; 0 = full training set (default)
-    batch_seed=42,   # base seed — iteration i uses batch_seed + i
+    batch_size=32,        # examples per iteration; 0 = full training set (default)
+    batch_seed=42,        # base seed — iteration i uses batch_seed + i
+    full_eval_steps=5,    # full training-set eval every 5 iterations (0 = never)
 )
 ```
 
@@ -173,6 +175,22 @@ help escape local optima by smoothing out noise from individual examples.
 Baseline and final verification evals always use the **full test set** —
 `batch_size` only affects the per-iteration training evals used by the
 optimization strategy.
+
+### Periodic full-eval checkpoints
+
+Mini-batch scores are noisy — a single good or bad batch can skew the
+trajectory. Use `--full-eval-steps` to periodically score the full
+training set for an accurate checkpoint:
+
+```bash
+# Batch of 32 per iter; full eval every 5 iterations
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \
+  --batch-size 32 --full-eval-steps 5
+```
+
+Iterations 5, 10, 15, … score the full training set; all others score
+the mini-batch. Full-eval iterations are marked with a **◈ full eval**
+badge in the dashboard flow graph.
 
 <Tip>
   A good starting point is 20–50% of your training set size. Too small a

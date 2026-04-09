@@ -33,6 +33,7 @@ class IterationRecord:
     eval_tokens: int = 0       # tokens used by the eval model this iteration
     reasoning_tokens: int = 0  # tokens used by the reasoning model this iteration
     change_summary: str = ""   # one-liner: what the reasoning model changed this iteration
+    is_full_eval: bool = False  # True when scored on the full training set (periodic checkpoint), not a mini-batch
 
 
 @dataclass
@@ -627,6 +628,7 @@ class OptimizationResult:
                     "reasoning": r.reasoning,
                     "eval_tokens": r.eval_tokens,
                     "reasoning_tokens": r.reasoning_tokens,
+                    **({"is_full_eval": True} if r.is_full_eval else {}),
                 }
                 for r in self.iterations
             ],

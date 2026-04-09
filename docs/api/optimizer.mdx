@@ -38,6 +38,7 @@ config = OptimizerConfig(
 | `train_ratio` | `float` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
 | `batch_size` | `int` | `0` | Mini-batch size per iteration. `0` = full training set. When > 0, each iteration samples this many examples at random from the training data. Baseline and final evals are unaffected |
 | `batch_seed` | `int` | `42` | Base seed for mini-batch sampling. Iteration `i` uses `batch_seed + i` so every batch is distinct but the run is reproducible |
+| `full_eval_steps` | `int` | `0` | When using mini-batch mode, run a full training-set eval every this many iterations. `0` = never. Has no effect when `batch_size=0` |
 | `max_workers` | `int` | `4` | Thread pool size for parallel evaluation |
 | `eval_runs` | `int` | `1` | Eval passes to average for baseline and final verification. Reports `mean ± std` and tests significance |
 | `reasoning_model` | `str` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |

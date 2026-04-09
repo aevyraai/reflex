@@ -258,6 +258,19 @@ class OptimizerConfig:
     ``batch_seed + i``, so every iteration's batch is different but the
     full run is deterministic and repeatable."""
 
+    full_eval_steps: int = 0
+    """When using mini-batch mode (``batch_size > 0``), run a full training-set
+    eval every this many iterations to get an accurate checkpoint score.
+    0 (default) = never — use mini-batch scores throughout.
+
+    Example: with ``batch_size=32`` and ``full_eval_steps=5``, iterations
+    1–4 score on a 32-example batch; iteration 5 scores on the full training
+    set; iterations 6–9 use batches again; iteration 10 is a full eval; and
+    so on. Full-eval iterations are marked in the trajectory and dashboard.
+
+    Has no effect when ``batch_size=0`` (already using the full set every
+    iteration)."""
+
     # --- Target from verdict ---
     target_model: str | None = None
     """Label of the model whose score we're trying to match (from verdict)."""

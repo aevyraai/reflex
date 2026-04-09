@@ -139,12 +139,25 @@ class StructuralStrategy(Strategy):
         # Track which transforms have been available
         transform_keys = list(STRUCTURAL_TRANSFORMS.keys())
 
+        _batch_size = getattr(config, "batch_size", 0)
+        _batch_seed = getattr(config, "batch_seed", 42)
+        _full_eval_steps = getattr(config, "full_eval_steps", 0)
+
         for i in range(config.max_iterations):
             tag = f"[structural][iter {i + 1}/{config.max_iterations}]"
             logger.info(f"{tag} Starting")
 
+            # Determine full-eval checkpoint or mini-batch for this iteration
+            is_full_eval = (
+                _batch_size > 0
+                and _full_eval_steps > 0
+                and (i + 1) % _full_eval_steps == 0
+            )
+            effective_batch = 0 if is_full_eval else _batch_size
+
             # 1. Evaluate current prompt
-            logger.info(f"{tag} Running eval...")
+            eval_label = "full-eval checkpoint" if is_full_eval else "eval"
+            logger.info(f"{tag} Running {eval_label}...")
             current_score, failing_samples, eval_tokens = _run_eval(
                 prompt=current_prompt,
                 dataset=dataset,
@@ -152,8 +165,8 @@ class StructuralStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=s_config.bottom_k,
-                batch_size=getattr(config, "batch_size", 0),
-                iteration_seed=getattr(config, "batch_seed", 42) + i,
+                batch_size=effective_batch,
+                iteration_seed=_batch_seed + i,
             )
 
             record = IterationRecord(
@@ -161,6 +174,7 @@ class StructuralStrategy(Strategy):
                 system_prompt=current_prompt,
                 score=current_score,
                 eval_tokens=eval_tokens,
+                is_full_eval=is_full_eval,
             )
             iterations.append(record)
             if on_iteration:
@@ -251,8 +265,10 @@ class StructuralStrategy(Strategy):
             best_variant_name = "current"
             variant_scores: dict[str, float] = {}
 
-            _iter_batch_size = getattr(config, "batch_size", 0)
-            _iter_seed = getattr(config, "batch_seed", 42) + i
+            # Variants use the same batch decision as the base eval for this
+            # iteration so comparisons are fair (all on the same examples).
+            _iter_batch_size = effective_batch
+            _iter_seed = _batch_seed + i
 
             def _eval_variant(v_name: str, v_prompt: str) -> tuple[str, str, float]:
                 v_score, _, _toks = _run_eval(
