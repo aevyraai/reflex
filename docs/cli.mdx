@@ -41,6 +41,8 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `--results-json` | — | Save full results (iterations, scores, analysis) to JSON |
 | `--run-dir` | `.reflex/` | Directory for run history and checkpoints |
 | `--train-split` | `0.8` | Fraction of data used for optimization. The rest is held out for baseline and final eval scores. Set to `1.0` to disable splitting |
+| `--val-split` | `0.0` | Fraction of total data reserved as a validation set, carved from the training portion. Val scores are tracked per-iteration to detect overfitting. Set to `0.0` to disable |
+| `--early-stopping-patience` | `0` | Stop optimization early if val score has not improved for N consecutive iterations. Only active when `--val-split > 0`. Set to `0` to disable |
 | `--resume` | `false` | Resume the latest interrupted run for this dataset |
 | `--resume-from` | — | Resume a specific run by ID (e.g. `001`) or directory path |
 | `-v`, `--verbose` | `false` | Show detailed logs including timing |
