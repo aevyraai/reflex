@@ -7,7 +7,6 @@ checkpoint score while keeping other iterations cheap.
 
 from __future__ import annotations
 
-import inspect
 import sys
 import unittest
 from pathlib import Path
