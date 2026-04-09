@@ -761,6 +761,13 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
         card.appendChild(el('div', { style: 'font-size:10px;color:var(--text-2);margin-top:5px;font-family:var(--mono)' },
           Object.entries(it.scores_by_metric).map(([k, v]) => k + ': ' + v.toFixed(3)).join(' · ')));
       }
+      if (it.val_score != null) {
+        const valColor = it.val_score >= it.score * 0.97 ? '#6b8aff' : '#f97316';
+        card.appendChild(el('div', { style: 'font-size:10px;margin-top:4px;font-family:var(--mono)' },
+          el('span', { style: 'color:var(--text-2)' }, 'val '),
+          el('span', { style: `color:${valColor};font-weight:600` }, it.val_score.toFixed(4))
+        ));
+      }
       if (it.timestamp) card.appendChild(el('div', { style: 'font-size:10px;color:var(--text-2);margin-top:3px;opacity:0.65' }, fmtTime(it.timestamp)));
 
       wrap.appendChild(place(card, nx, item.y, NW));
@@ -898,6 +905,21 @@ async function renderRunDetail(runId) {
   if (evalTok || reasonTok) {
     statsRow.appendChild(mkStat('Eval Tokens', fmtTok(evalTok), null));
     statsRow.appendChild(mkStat('Reason Tokens', fmtTok(reasonTok), null));
+  }
+
+  // Dataset split sizes (shown when result carries split info)
+  const resTrain = result && result.train_size;
+  const resVal   = result && result.val_size;
+  const resTest  = result && result.test_size;
+  if (resTrain || resTest) {
+    const splitLabel = resVal
+      ? resTrain + ' / ' + resVal + ' / ' + resTest
+      : resTrain + ' / ' + resTest;
+    const splitTitle = resVal ? 'Train / Val / Test' : 'Train / Test';
+    statsRow.appendChild(mkStat(splitTitle, splitLabel, null));
+  }
+  if (result && result.early_stopped) {
+    statsRow.appendChild(mkStat('Early Stopped', 'Val plateau', 'accent'));
   }
 
   app.appendChild(statsRow);

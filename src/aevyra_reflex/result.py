@@ -33,6 +33,7 @@ class IterationRecord:
     eval_tokens: int = 0       # tokens used by the eval model this iteration
     reasoning_tokens: int = 0  # tokens used by the reasoning model this iteration
     change_summary: str = ""   # one-liner: what the reasoning model changed this iteration
+    val_score: float | None = None  # validation set score (None when val_ratio=0)
     is_full_eval: bool = False  # True when scored on the full training set (periodic checkpoint), not a mini-batch
 
 
@@ -81,6 +82,11 @@ class OptimizationResult:
     test_size: int = 0   # held-out examples used for baseline and final eval
     batch_size: int = 0  # per-iteration mini-batch size (0 = full training set)
 
+    # Validation split info (filled by optimizer when val_ratio > 0)
+    val_size: int = 0                     # examples in the validation set
+    val_trajectory: list[float] = field(default_factory=list)  # val score per iteration
+    early_stopped: bool = False           # True when early stopping triggered on val plateau
+
     # Statistical significance (filled by optimizer after run)
     p_value: float | None = None        # p-value from paired Wilcoxon/t-test (None if n < 2 or scipy missing)
     is_significant: bool | None = None  # True if p_value < 0.05
@@ -127,7 +133,12 @@ class OptimizationResult:
             lines.append("  OPTIMIZATION RESULTS")
             lines.append("=" * 52)
             if self.train_size and self.test_size:
-                lines.append(f"  Train / test     : {self.train_size} / {self.test_size} samples")
+                if self.val_size:
+                    lines.append(
+                        f"  Train/val/test   : {self.train_size} / {self.val_size} / {self.test_size} samples"
+                    )
+                else:
+                    lines.append(f"  Train / test     : {self.train_size} / {self.test_size} samples")
                 if self.batch_size:
                     lines.append(f"  Batch size       : {self.batch_size} examples/iter  (mini-batch mode)")
                 lines.append(f"  Baseline score   : {_fmt_score(self.baseline)}  (on {self.test_size}-sample test set)")
@@ -146,6 +157,8 @@ class OptimizationResult:
             else:
                 lines.append("  Significance     : install scipy for p-values")
             lines.append(f"  Iterations       : {len(self.iterations)}")
+            if self.early_stopped:
+                lines.append("  Early stopped    : Yes (val score plateaued)")
             lines.append(f"  Converged        : {self.converged}")
             if self.total_eval_tokens or self.total_reasoning_tokens:
                 def _fmt_tok(n): return f"{n/1e6:.2f}M" if n >= 1_000_000 else (f"{n/1000:.1f}K" if n >= 1000 else str(n))
@@ -164,7 +177,9 @@ class OptimizationResult:
                     lines.append(f"    {m:30s}  {b:.4f} → {f:.4f}  ({s}{d:.4f})")
                 lines.append("-" * 52)
 
-            lines.append(f"  Trajectory : {' → '.join(f'{s:.3f}' for s in self.score_trajectory)}")
+            lines.append(f"  Train traj : {' → '.join(f'{s:.3f}' for s in self.score_trajectory)}")
+            if self.val_trajectory:
+                lines.append(f"  Val traj   : {' → '.join(f'{s:.3f}' for s in self.val_trajectory)}")
             lines.append("=" * 52)
 
             # What happened (trajectory + strategy)
@@ -628,6 +643,7 @@ class OptimizationResult:
                     "reasoning": r.reasoning,
                     "eval_tokens": r.eval_tokens,
                     "reasoning_tokens": r.reasoning_tokens,
+                    **({"val_score": r.val_score} if r.val_score is not None else {}),
                     **({"is_full_eval": True} if r.is_full_eval else {}),
                 }
                 for r in self.iterations
@@ -657,6 +673,12 @@ class OptimizationResult:
             d["train_size"] = self.train_size
         if self.test_size:
             d["test_size"] = self.test_size
+        if self.val_size:
+            d["val_size"] = self.val_size
+        if self.val_trajectory:
+            d["val_trajectory"] = self.val_trajectory
+        if self.early_stopped:
+            d["early_stopped"] = self.early_stopped
         if self.batch_size:
             d["batch_size"] = self.batch_size
         if self.improvement is not None:

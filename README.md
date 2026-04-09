@@ -343,6 +343,46 @@ config = OptimizerConfig(
 Without `--source-model`, reflex still optimizes the prompt — it just won't have
 the explicit migration context to guide its rewrites.
 
+## Validation split and early stopping
+
+Add a validation set to detect overfitting mid-run. Reflex evaluates each
+candidate prompt on the val examples after every iteration and logs both the
+train and val scores. If train keeps climbing but val plateaus, the prompt is
+fitting training examples specifically. Use `--early-stopping-patience` to
+stop automatically when that happens:
+
+```bash
+# 3-way split: 70% train / 10% val / 20% test
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --train-split 0.8 \
+  --val-split 0.1
+
+# Same split, stop early when val stagnates for 3 consecutive iterations
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --train-split 0.8 \
+  --val-split 0.1 \
+  --early-stopping-patience 3
+```
+
+The summary shows the full picture:
+
+```
+  Train/val/test   : 70 / 10 / 20 samples
+  Baseline score   : 0.5500  (on 20-sample test set)
+  Final score      : 0.7100  (on 20-sample test set)
+  Improvement      : +0.1600 (+29.1%)
+  Iterations       : 6
+  Early stopped    : Yes (val score plateaued)
+  Train traj   : 0.600 → 0.650 → 0.710 → 0.720 → 0.725 → 0.724
+  Val traj     : 0.580 → 0.640 → 0.690 → 0.688 → 0.685 → 0.682
+```
+
+When early stopping triggers, reflex returns the prompt with the best
+validation score — not the latest one — so the final prompt generalizes
+rather than fitting the training examples specifically.
+
 ## Statistical significance
 
 After every run, reflex tests whether the improvement is real or noise — a

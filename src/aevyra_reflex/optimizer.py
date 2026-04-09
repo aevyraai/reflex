@@ -33,6 +33,11 @@ from aevyra_reflex.result import EvalSnapshot, OptimizationResult, SampleSnapsho
 logger = logging.getLogger(__name__)
 
 
+class _EarlyStop(Exception):
+    """Raised inside the iteration callback to interrupt optimization when the
+    validation score has not improved for ``early_stopping_patience`` iterations."""
+
+
 # ---------------------------------------------------------------------------
 # Verdict results parsing — extract target scores from verdict output
 # ---------------------------------------------------------------------------
@@ -242,6 +247,26 @@ class OptimizerConfig:
     Set to 1.0 to use the full dataset for everything (no split).
     Default: 0.8 (80% train / 20% test)."""
 
+    val_ratio: float = 0.0
+    """Fraction of the total dataset reserved as a validation set, carved out of
+    the training portion. Used to detect overfitting mid-run: if the val score
+    plateaus while train scores keep climbing, the prompt is fitting the training
+    examples specifically. Set to 0.0 (default) to disable validation splitting.
+
+    With train_ratio=0.8 and val_ratio=0.1, the actual split is:
+      70% train  /  10% val  /  20% test
+
+    Requires train_ratio - val_ratio >= 0.1 (at least 10% left for training)."""
+
+    early_stopping_patience: int = 0
+    """Stop optimization early if the validation score has not improved for this
+    many consecutive iterations. Only takes effect when val_ratio > 0.
+    Set to 0 (default) to disable. When early stopping triggers, the prompt with
+    the best validation score is returned (not the most recent prompt).
+
+    Recommended values: 2–4 iterations. Smaller values stop sooner (risk of
+    stopping too early on noise); larger values are more conservative."""
+
     batch_size: int = 0
     """Mini-batch size per optimization iteration. 0 (default) = full training
     set. When > 0, each iteration samples this many examples at random from the
@@ -343,6 +368,55 @@ class PromptOptimizer:
         test_convos = [convos[i] for i in range(n) if i not in train_indices]
 
         return Dataset(conversations=train_convos), Dataset(conversations=test_convos)
+
+    @staticmethod
+    def _split_dataset_3way(
+        dataset: Any,
+        train_ratio: float,
+        val_ratio: float,
+        seed: int = 42,
+    ) -> tuple[Any, Any | None, Any]:
+        """Split a verdict Dataset into (train, val, test) subsets.
+
+        The validation set is carved out of what would otherwise be the training
+        portion, so test size is unaffected by adding a val split.
+
+        Args:
+            dataset: A verdict Dataset instance with a .conversations list.
+            train_ratio: Fraction NOT reserved for test (train + val combined).
+                         Must be in (0, 1).
+            val_ratio: Fraction of total dataset reserved for validation.
+                       Must be < train_ratio. Set to 0.0 for a 2-way split.
+            seed: Random seed for reproducibility (default 42).
+
+        Returns:
+            (train_dataset, val_dataset, test_dataset) where val_dataset is
+            None when val_ratio == 0.0.
+        """
+        import random
+        from aevyra_verdict.dataset import Dataset
+
+        convos = list(dataset.conversations)
+        n = len(convos)
+
+        n_test = max(1, n - round(n * train_ratio))
+        n_val = max(1, round(n * val_ratio)) if val_ratio > 0.0 else 0
+        n_train = max(1, n - n_test - n_val)
+
+        # Guard against rounding pushing total over n
+        while n_train + n_val + n_test > n:
+            n_train -= 1
+
+        rng = random.Random(seed)
+        indices = list(range(n))
+        rng.shuffle(indices)
+
+        train_convos = [convos[indices[i]] for i in range(n_train)]
+        val_convos = [convos[indices[i]] for i in range(n_train, n_train + n_val)]
+        test_convos = [convos[indices[i]] for i in range(n_train + n_val, n)]
+
+        val_ds = Dataset(conversations=val_convos) if n_val > 0 else None
+        return Dataset(conversations=train_convos), val_ds, Dataset(conversations=test_convos)
 
     def add_provider(
         self,
@@ -541,9 +615,29 @@ class PromptOptimizer:
 
         # --- Dataset split ---
         train_ratio = self.config.train_ratio
-        if 0.0 < train_ratio < 1.0:
-            train_dataset, test_dataset = self._split_dataset(self._dataset, train_ratio)
+        val_ratio = self.config.val_ratio
+
+        if val_ratio > 0.0 and 0.0 < train_ratio < 1.0:
+            if val_ratio >= train_ratio:
+                raise ValueError(
+                    f"val_ratio ({val_ratio}) must be less than train_ratio ({train_ratio}). "
+                    f"At least 10%% of data must remain for training."
+                )
+            train_dataset, val_dataset, test_dataset = self._split_dataset_3way(
+                self._dataset, train_ratio=train_ratio, val_ratio=val_ratio
+            )
             n_train = len(train_dataset.conversations)
+            n_val = len(val_dataset.conversations) if val_dataset else 0
+            n_test = len(test_dataset.conversations)
+            logger.info(
+                f"Dataset split (3-way): {n_train} train / {n_val} val / {n_test} test "
+                f"— val set used to detect overfitting; test set for baseline and final eval"
+            )
+        elif 0.0 < train_ratio < 1.0:
+            train_dataset, test_dataset = self._split_dataset(self._dataset, train_ratio)
+            val_dataset = None
+            n_train = len(train_dataset.conversations)
+            n_val = 0
             n_test = len(test_dataset.conversations)
             logger.info(
                 f"Dataset split: {n_train} train / {n_test} test "
@@ -553,7 +647,9 @@ class PromptOptimizer:
         else:
             train_dataset = self._dataset
             test_dataset = self._dataset
+            val_dataset = None
             n_train = len(self._dataset.conversations)
+            n_val = 0
             n_test = n_train
 
         if self.config.batch_size > 0:
@@ -655,8 +751,26 @@ class PromptOptimizer:
         strategy_cls = get_strategy(self.config.strategy)
         strategy = strategy_cls()
 
-        # Wrap the on_iteration callback to save checkpoints
+        # Shared mutable state for val tracking and early stopping
+        _es: dict[str, Any] = {
+            "val_history": [],           # val score per iteration
+            "iterations": [],            # IterationRecord objects collected
+            "best_train_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
+            "best_train_score": checkpoint.best_score if checkpoint else -1.0,
+            "best_val_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
+            "best_val_score": -1.0,
+            "trajectory": list(checkpoint.score_trajectory) if checkpoint else [],
+        }
+
+        # Wrap the on_iteration callback to save checkpoints and run val eval
         def _checkpointing_callback(record):
+            _es["iterations"].append(record)
+
+            # Track best train prompt
+            if record.score >= _es["best_train_score"]:
+                _es["best_train_score"] = record.score
+                _es["best_train_prompt"] = record.system_prompt
+
             if on_iteration:
                 on_iteration(record)
             for cb in _callbacks:
@@ -677,45 +791,83 @@ class PromptOptimizer:
                     reasoning_tokens=getattr(record, "reasoning_tokens", 0),
                     change_summary=getattr(record, "change_summary", ""),
                 ))
+                _es["trajectory"].append(record.score)
                 # Update checkpoint
                 run.save_checkpoint(CheckpointState(
                     run_id=run.run_id,
                     initial_prompt=initial_prompt,
                     current_prompt=record.system_prompt,
                     completed_iterations=record.iteration,
-                    best_prompt=record.system_prompt if record.score >= (
-                        checkpoint.best_score if checkpoint else 0
-                    ) else (checkpoint.best_prompt if checkpoint else initial_prompt),
-                    best_score=max(
-                        record.score,
-                        checkpoint.best_score if checkpoint else 0,
-                    ),
-                    score_trajectory=(
-                        (checkpoint.score_trajectory if checkpoint else [])
-                        + [record.score]
-                    ) if not hasattr(_checkpointing_callback, '_trajectory') else
-                    _checkpointing_callback._trajectory + [record.score],
+                    best_prompt=_es["best_train_prompt"],
+                    best_score=_es["best_train_score"],
+                    score_trajectory=list(_es["trajectory"]),
                     previous_reasoning=record.reasoning,
                     baseline={
                         "mean_score": baseline.mean_score,
                         "scores_by_metric": baseline.scores_by_metric,
                     },
                 ))
-                # Track trajectory across calls
-                if not hasattr(_checkpointing_callback, '_trajectory'):
-                    _checkpointing_callback._trajectory = checkpoint.score_trajectory[:] if checkpoint else []
-                _checkpointing_callback._trajectory.append(record.score)
 
-        result = strategy.run(
-            initial_prompt=checkpoint.current_prompt if checkpoint else initial_prompt,
-            dataset=train_dataset,
-            providers=self._providers,
-            metrics=self._metrics,
-            agent=llm,
-            config=self.config,
-            on_iteration=_checkpointing_callback,
-            **({"resume_state": checkpoint.strategy_state} if checkpoint and checkpoint.strategy_state else {}),
-        )
+            # --- Validation eval + early stopping ---
+            if val_dataset is not None:
+                val_snap = self._run_eval_single(record.system_prompt, dataset=val_dataset)
+                val_score = val_snap.mean_score
+                _es["val_history"].append(val_score)
+                record.val_score = val_score
+
+                # Track best val prompt (the one least prone to overfitting)
+                if val_score >= _es["best_val_score"]:
+                    _es["best_val_score"] = val_score
+                    _es["best_val_prompt"] = record.system_prompt
+
+                logger.info(
+                    f"{tag} Iteration {record.iteration}: "
+                    f"train={record.score:.4f}  val={val_score:.4f}"
+                )
+
+                # Check early stopping condition
+                patience = self.config.early_stopping_patience
+                if patience > 0 and len(_es["val_history"]) >= patience:
+                    best_val_overall = max(_es["val_history"])
+                    # Index of last best-val iteration
+                    best_val_idx = len(_es["val_history"]) - 1 - next(
+                        i for i, v in enumerate(reversed(_es["val_history"]))
+                        if v == best_val_overall
+                    )
+                    iters_since_best = len(_es["val_history"]) - 1 - best_val_idx
+                    if iters_since_best >= patience:
+                        logger.info(
+                            f"{tag} Early stopping triggered: val score has not improved "
+                            f"for {patience} consecutive iteration(s) "
+                            f"(best val {best_val_overall:.4f} at iteration {best_val_idx + 1}). "
+                            f"Using prompt from iteration {best_val_idx + 1}."
+                        )
+                        raise _EarlyStop()
+
+        _early_stopped = False
+        try:
+            result = strategy.run(
+                initial_prompt=checkpoint.current_prompt if checkpoint else initial_prompt,
+                dataset=train_dataset,
+                providers=self._providers,
+                metrics=self._metrics,
+                agent=llm,
+                config=self.config,
+                on_iteration=_checkpointing_callback,
+                **({"resume_state": checkpoint.strategy_state} if checkpoint and checkpoint.strategy_state else {}),
+            )
+        except _EarlyStop:
+            _early_stopped = True
+            # Build a partial result from what we've collected so far
+            best_prompt = _es["best_val_prompt"] if val_dataset else _es["best_train_prompt"]
+            best_score = _es["best_val_score"] if val_dataset else _es["best_train_score"]
+            from aevyra_reflex.result import OptimizationResult as _OR
+            result = _OR(
+                best_prompt=best_prompt,
+                best_score=best_score,
+                iterations=list(_es["iterations"]),
+                converged=False,
+            )
 
         # --- Step 3: Final verification eval (on held-out test set) ---
         eval_runs = self.config.eval_runs
@@ -737,6 +889,12 @@ class PromptOptimizer:
         if 0.0 < self.config.train_ratio < 1.0:
             result.train_size = n_train
             result.test_size = n_test
+
+        # Record validation split info
+        if n_val > 0:
+            result.val_size = n_val
+            result.val_trajectory = list(_es["val_history"])
+        result.early_stopped = _early_stopped
 
         # Record mini-batch size when active
         if self.config.batch_size > 0:

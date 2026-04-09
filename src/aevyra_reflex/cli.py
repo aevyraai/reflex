@@ -180,6 +180,30 @@ def optimize(
             ),
         ),
     ] = 1,
+    val_split: Annotated[
+        float,
+        typer.Option(
+            "--val-split",
+            help=(
+                "Fraction of data reserved as a validation set (0.0–1.0, exclusive). "
+                "Carved from the training portion; test size is unaffected. "
+                "Val scores are evaluated after each iteration to detect overfitting. "
+                "Set to 0.0 (default) to disable. "
+                "Example: --train-split 0.8 --val-split 0.1 → 70%% train / 10%% val / 20%% test."
+            ),
+        ),
+    ] = 0.0,
+    early_stopping_patience: Annotated[
+        int,
+        typer.Option(
+            "--early-stopping-patience",
+            help=(
+                "Stop optimization when val score has not improved for N consecutive "
+                "iterations. Only active when --val-split > 0. "
+                "Set to 0 (default) to disable. Recommended: 2–4."
+            ),
+        ),
+    ] = 0,
     verbose: Annotated[
         bool,
         typer.Option("-v", "--verbose", help="Show debug output."),
@@ -274,6 +298,23 @@ def optimize(
         typer.echo("Error: --train-split must be between 0.0 (exclusive) and 1.0 (inclusive).", err=True)
         raise typer.Exit(code=1)
 
+    # Validate val_split
+    if not (0.0 <= val_split < 1.0):
+        typer.echo("Error: --val-split must be between 0.0 (inclusive) and 1.0 (exclusive).", err=True)
+        raise typer.Exit(code=1)
+    if val_split >= train_split:
+        typer.echo(
+            f"Error: --val-split ({val_split}) must be less than --train-split ({train_split}). "
+            "At least some data must remain for training.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if early_stopping_patience < 0:
+        typer.echo("Error: --early-stopping-patience must be >= 0.", err=True)
+        raise typer.Exit(code=1)
+    if early_stopping_patience > 0 and val_split == 0.0:
+        typer.echo("Warning: --early-stopping-patience has no effect without --val-split.", err=True)
+
     # Build optimizer config
     if eval_runs < 1:
         typer.echo("Error: --eval-runs must be at least 1.", err=True)
@@ -309,6 +350,8 @@ def optimize(
         target_source=target_source,
         source_model=source_model,
         train_ratio=train_split,
+        val_ratio=val_split,
+        early_stopping_patience=early_stopping_patience,
         batch_size=batch_size,
         full_eval_steps=full_eval_steps,
     )
@@ -373,7 +416,15 @@ def optimize(
     typer.echo("  aevyra-reflex")
     typer.echo("=" * 52)
     n_total = len(ds.conversations)
-    if 0.0 < train_split < 1.0:
+    if val_split > 0.0 and 0.0 < train_split < 1.0:
+        n_test = max(1, n_total - round(n_total * train_split))
+        n_val = max(1, round(n_total * val_split))
+        n_train = max(1, n_total - n_test - n_val)
+        split_display = (
+            f"{n_train} train / {n_val} val / {n_test} test "
+            f"({n_train/n_total:.0%} / {n_val/n_total:.0%} / {n_test/n_total:.0%})"
+        )
+    elif 0.0 < train_split < 1.0:
         n_train = max(1, round(n_total * train_split))
         n_test = max(1, n_total - n_train)
         split_display = f"{n_train} train / {n_test} test ({train_split:.0%} / {1 - train_split:.0%})"
@@ -397,6 +448,9 @@ def optimize(
             typer.echo(f"  Batch size : {batch_size} examples/iter  (mini-batch mode)")
     if eval_runs > 1:
         typer.echo(f"  Eval runs  : {eval_runs}×  (baseline + final averaged over {eval_runs} passes)")
+    if val_split > 0.0:
+        es_label = f"  patience={early_stopping_patience}" if early_stopping_patience > 0 else "  early stopping disabled"
+        typer.echo(f"  Val split  : {val_split:.0%} of total ({es_label})")
     typer.echo("=" * 52)
     typer.echo()
 
