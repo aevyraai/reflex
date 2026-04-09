@@ -875,13 +875,6 @@ async function renderRunDetail(runId) {
   statsRow.appendChild(mkStat('Strategy', optConfig.strategy || '--', null));
   if (durationSec != null) statsRow.appendChild(mkStat('Duration', fmtDuration(durationSec)));
 
-  // Dataset split stats (shown when train/test split was used)
-  const trainSize = result && result.train_size;
-  const testSize = result && result.test_size;
-  if (trainSize && testSize) {
-    statsRow.appendChild(mkStat('Train / Test', trainSize + ' / ' + testSize, null));
-  }
-
   // Mini-batch mode (shown when batch_size > 0)
   const batchSize = result && result.batch_size;
   if (batchSize) {
@@ -922,6 +915,15 @@ async function renderRunDetail(runId) {
     statsRow.appendChild(mkStat('Early Stopped', 'Val plateau', 'accent'));
   }
 
+  // Statistical significance (shown when p_value is available)
+  if (result && result.p_value != null) {
+    const pLabel = result.is_significant ? '✓ significant' : '✗ not significant';
+    const pCls = result.is_significant ? 'green' : null;
+    statsRow.appendChild(mkStat('Significance', 'p=' + result.p_value.toFixed(4), pCls,
+      el('div', { style: 'font-size:10px;color:var(--text-2);margin-top:2px' }, pLabel + ' (α=0.05)')
+    ));
+  }
+
   app.appendChild(statsRow);
 
   // Run log panel (collapsed by default; expand to show raw event timeline)
@@ -954,6 +956,80 @@ async function renderRunDetail(runId) {
       logToggleBtn.textContent = (open ? '▶' : '▼') + ' Run Log (' + logEntries.length + ' events)';
     });
     app.appendChild(el('div', { style: { marginBottom: '20px' } }, logToggleBtn, logBody));
+  }
+
+  // Score trajectory (shown when there are iterations)
+  if (iterations.length > 0) {
+    const trainScores = iterations.map(it => it.score);
+    const valTraj = result && result.val_trajectory && result.val_trajectory.length ? result.val_trajectory : null;
+
+    // Build compact sparkline: dual series SVG
+    const spW = 560, spH = 80;
+    const spPad = { top: 8, right: 12, bottom: 20, left: 44 };
+    const sw = spW - spPad.left - spPad.right;
+    const sh = spH - spPad.top - spPad.bottom;
+    const allVals = [...trainScores, ...(valTraj || [])];
+    let spMin = Math.min(...allVals), spMax = Math.max(...allVals);
+    const spPadY = (spMax - spMin) * 0.2 || 0.03;
+    spMin = Math.max(0, spMin - spPadY); spMax = spMax + spPadY;
+    const sx = i => spPad.left + (trainScores.length > 1 ? (i / (trainScores.length - 1)) * sw : sw / 2);
+    const sy = v => spPad.top + sh - ((v - spMin) / (spMax - spMin)) * sh;
+
+    const spSvg = svgEl('svg', { width: spW, height: spH, viewBox: '0 0 ' + spW + ' ' + spH });
+
+    // Y ticks
+    [spMin, (spMin + spMax) / 2, spMax].forEach(v => {
+      const y = sy(v);
+      spSvg.appendChild(svgEl('line', { x1: spPad.left, y1: y, x2: spPad.left + sw, y2: y, stroke: '#1e2a3a', 'stroke-dasharray': '3,3' }));
+      spSvg.appendChild(svgEl('text', { x: spPad.left - 6, y: y + 4, fill: '#506878', 'font-size': '10', 'text-anchor': 'end', 'font-family': 'var(--mono)' }, v.toFixed(2)));
+    });
+
+    // X tick labels (first, mid, last)
+    [0, Math.floor((trainScores.length - 1) / 2), trainScores.length - 1].forEach(i => {
+      spSvg.appendChild(svgEl('text', { x: sx(i), y: spPad.top + sh + 14, fill: '#506878', 'font-size': '10', 'text-anchor': 'middle', 'font-family': 'var(--sans)' }, '#' + iterations[i].iteration));
+    });
+
+    // Train line
+    const trainPts = trainScores.map((v, i) => [sx(i), sy(v)]);
+    spSvg.appendChild(svgEl('path', { d: trainPts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0] + ',' + p[1]).join(' '), fill: 'none', stroke: '#00ddcc', 'stroke-width': '2', 'stroke-linejoin': 'round' }));
+    trainPts.forEach(p => spSvg.appendChild(svgEl('circle', { cx: p[0], cy: p[1], r: '3', fill: '#00ddcc', stroke: '#06090f', 'stroke-width': '1.5' })));
+
+    // Val line (if present)
+    if (valTraj) {
+      const valPts = valTraj.map((v, i) => [sx(i), sy(v)]);
+      spSvg.appendChild(svgEl('path', { d: valPts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0] + ',' + p[1]).join(' '), fill: 'none', stroke: '#6b8aff', 'stroke-width': '2', 'stroke-dasharray': '5,3', 'stroke-linejoin': 'round' }));
+      valPts.forEach(p => spSvg.appendChild(svgEl('circle', { cx: p[0], cy: p[1], r: '3', fill: '#6b8aff', stroke: '#06090f', 'stroke-width': '1.5' })));
+    }
+
+    // Legend
+    const legendItems = [
+      el('span', { style: 'display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-2)' },
+        svgEl('svg', { width: '20', height: '6', viewBox: '0 0 20 6', style: 'flex-shrink:0' },
+          svgEl('line', { x1: '0', y1: '3', x2: '20', y2: '3', stroke: '#00ddcc', 'stroke-width': '2' }),
+          svgEl('circle', { cx: '10', cy: '3', r: '3', fill: '#00ddcc' })
+        ),
+        document.createTextNode('Train score')
+      )
+    ];
+    if (valTraj) {
+      legendItems.push(
+        el('span', { style: 'display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--text-2)' },
+          svgEl('svg', { width: '20', height: '6', viewBox: '0 0 20 6', style: 'flex-shrink:0' },
+            svgEl('line', { x1: '0', y1: '3', x2: '20', y2: '3', stroke: '#6b8aff', 'stroke-width': '2', 'stroke-dasharray': '5,3' }),
+            svgEl('circle', { cx: '10', cy: '3', r: '3', fill: '#6b8aff' })
+          ),
+          document.createTextNode('Val score')
+        )
+      );
+    }
+
+    const spContainer = el('div', { style: 'position:relative' }, spSvg);
+    const legendRow = el('div', { style: 'display:flex;gap:16px;margin-top:4px;margin-left:' + spPad.left + 'px' }, ...legendItems);
+    app.appendChild(el('div', { class: 'chart-card', style: 'margin-bottom:20px' },
+      el('div', { style: 'font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:10px;letter-spacing:0.04em;text-transform:uppercase' }, 'Score Trajectory'),
+      spContainer,
+      legendRow
+    ));
   }
 
   // Two columns: flow graph left, detail right
@@ -1025,6 +1101,13 @@ async function renderRunDetail(runId) {
     addCfg('max_iterations', optConfig.max_iterations);
     addCfg('score_threshold', optConfig.score_threshold);
     addCfg('max_workers', optConfig.max_workers);
+    if (optConfig.train_ratio != null) addCfg('train_ratio', optConfig.train_ratio);
+    if (optConfig.val_ratio) addCfg('val_ratio', optConfig.val_ratio);
+    if (optConfig.early_stopping_patience) addCfg('early_stopping_patience', optConfig.early_stopping_patience);
+    if (optConfig.batch_size) addCfg('batch_size', optConfig.batch_size);
+    if (optConfig.batch_size && optConfig.batch_seed != null) addCfg('batch_seed', optConfig.batch_seed);
+    if (optConfig.full_eval_steps) addCfg('full_eval_steps', optConfig.full_eval_steps);
+    if (optConfig.eval_runs && optConfig.eval_runs > 1) addCfg('eval_runs', optConfig.eval_runs);
     addCfg('dataset', config.dataset_path);
     rightCol.appendChild(el('div', { class: 'section' },
       el('div', { class: 'section-title' }, 'Configuration'),
