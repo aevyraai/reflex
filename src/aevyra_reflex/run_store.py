@@ -71,6 +71,8 @@ class IterationState:
     eval_tokens: int = 0       # tokens consumed by eval model(s) this iteration
     reasoning_tokens: int = 0  # tokens consumed by reasoning model this iteration
     change_summary: str = ""   # one-liner: what the reasoning model changed this iteration
+    val_score: float | None = None  # validation-set score this iteration (None when val_ratio=0)
+    is_full_eval: bool = False      # True when scored on full training set (mini-batch checkpoint)
     timestamp: str = ""
 
 
@@ -434,6 +436,9 @@ class Run:
                 reasoning=data.get("reasoning", ""),
                 eval_tokens=data.get("eval_tokens", 0),
                 reasoning_tokens=data.get("reasoning_tokens", 0),
+                change_summary=data.get("change_summary", ""),
+                val_score=data.get("val_score"),
+                is_full_eval=data.get("is_full_eval", False),
                 timestamp=data.get("timestamp", ""),
             ))
         return iterations
@@ -497,7 +502,7 @@ def _now_iso() -> str:
 
 
 def _iteration_to_dict(state: IterationState) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "iteration": state.iteration,
         "system_prompt": state.system_prompt,
         "score": state.score,
@@ -507,6 +512,11 @@ def _iteration_to_dict(state: IterationState) -> dict[str, Any]:
         "reasoning_tokens": state.reasoning_tokens,
         "timestamp": state.timestamp,
     }
+    if state.val_score is not None:
+        d["val_score"] = state.val_score
+    if state.is_full_eval:
+        d["is_full_eval"] = True
+    return d
 
 
 def _checkpoint_to_dict(state: CheckpointState) -> dict[str, Any]:

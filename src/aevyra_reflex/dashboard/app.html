@@ -1508,6 +1508,65 @@ function renderNewRun() {
     )
   ));
 
+  // ── Advanced options (collapsible) ────────────────────────
+  const advBody = el('div', { style: { display: 'none', marginTop: '14px' } });
+
+  // Train/val/test split
+  const trainRatioInput = el('input', { class: 'form-input', type: 'number', value: '0.8', min: '0.1', max: '1.0', step: '0.05' });
+  const valRatioInput   = el('input', { class: 'form-input', type: 'number', value: '0',   min: '0',   max: '0.5', step: '0.05' });
+  const earlyStopInput  = el('input', { class: 'form-input', type: 'number', value: '0',   min: '0',   max: '20',  step: '1' });
+  advBody.appendChild(el('div', { class: 'form-row' },
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Train Split'),
+      trainRatioInput,
+      el('div', { class: 'form-hint' }, 'Fraction used for optimization (0.8 = 80% train / 20% test).')
+    ),
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Val Split'),
+      valRatioInput,
+      el('div', { class: 'form-hint' }, 'Fraction reserved for validation to detect overfitting. 0 = disabled.')
+    ),
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Early Stopping Patience'),
+      earlyStopInput,
+      el('div', { class: 'form-hint' }, 'Stop when val score stagnates for N iters. 0 = disabled. Requires Val Split > 0.')
+    )
+  ));
+
+  // Mini-batch
+  const batchSizeInput    = el('input', { class: 'form-input', type: 'number', value: '0',  min: '0',  step: '1' });
+  const fullEvalStepInput = el('input', { class: 'form-input', type: 'number', value: '0',  min: '0',  step: '1' });
+  const evalRunsInput     = el('input', { class: 'form-input', type: 'number', value: '1',  min: '1',  max: '10', step: '1' });
+  advBody.appendChild(el('div', { class: 'form-row', style: { marginTop: '14px' } },
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Batch Size'),
+      batchSizeInput,
+      el('div', { class: 'form-hint' }, 'Examples sampled per iteration. 0 = full training set.')
+    ),
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Full Eval Steps'),
+      fullEvalStepInput,
+      el('div', { class: 'form-hint' }, 'Full training-set checkpoint every N iters. 0 = never. Requires Batch Size > 0.')
+    ),
+    el('div', { class: 'form-group', style: { marginBottom: '0' } },
+      el('label', { class: 'form-label' }, 'Eval Runs'),
+      evalRunsInput,
+      el('div', { class: 'form-hint' }, 'Eval passes to average for baseline & final. 1 = single pass.')
+    )
+  ));
+
+  const advToggleBtn = el('button', {
+    type: 'button',
+    style: { background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: '13px', fontFamily: 'var(--sans)', padding: '0', marginTop: '18px' }
+  }, '▶ Advanced options');
+  advToggleBtn.addEventListener('click', () => {
+    const open = advBody.style.display !== 'none';
+    advBody.style.display = open ? 'none' : '';
+    advToggleBtn.textContent = (open ? '▶' : '▼') + ' Advanced options';
+  });
+  wrap.appendChild(advToggleBtn);
+  wrap.appendChild(advBody);
+
   // ── Error box ─────────────────────────────────────────────
   const errBox = el('div', { style: { display: 'none', marginTop: '14px', padding: '10px 14px', background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.3)', borderRadius: '7px', color: 'var(--red)', fontSize: '13px' } });
 
@@ -1550,6 +1609,12 @@ function renderNewRun() {
         target_models: threshMode === 'auto' ? threshAutoInput.value.split(',').map(s => s.trim()).filter(Boolean) : [],
         reasoning_model: ($('#reasoning-model-input') || {}).value || '',
         source_model: ($('#source-model-input') || {}).value || '',
+        train_ratio: parseFloat(trainRatioInput.value) || 0.8,
+        val_ratio: parseFloat(valRatioInput.value) || 0.0,
+        early_stopping_patience: parseInt(earlyStopInput.value, 10) || 0,
+        batch_size: parseInt(batchSizeInput.value, 10) || 0,
+        full_eval_steps: parseInt(fullEvalStepInput.value, 10) || 0,
+        eval_runs: parseInt(evalRunsInput.value, 10) || 1,
       };
       const resp = await fetch('/api/jobs/start', {
         method: 'POST',

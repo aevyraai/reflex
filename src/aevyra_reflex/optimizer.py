@@ -790,6 +790,8 @@ class PromptOptimizer:
                     eval_tokens=getattr(record, "eval_tokens", 0),
                     reasoning_tokens=getattr(record, "reasoning_tokens", 0),
                     change_summary=getattr(record, "change_summary", ""),
+                    val_score=getattr(record, "val_score", None),
+                    is_full_eval=getattr(record, "is_full_eval", False),
                 ))
                 _es["trajectory"].append(record.score)
                 # Update checkpoint
