@@ -152,7 +152,7 @@ class OptimizationResult:
                 lines.append("  Significance     : install scipy for p-values")
             lines.append(f"  Iterations       : {len(self.iterations)}")
             if self.early_stopped:
-                lines.append(f"  Early stopped    : Yes (val score plateaued)")
+                lines.append("  Early stopped    : Yes (val score plateaued)")
             lines.append(f"  Converged        : {self.converged}")
             if self.total_eval_tokens or self.total_reasoning_tokens:
                 def _fmt_tok(n): return f"{n/1e6:.2f}M" if n >= 1_000_000 else (f"{n/1000:.1f}K" if n >= 1000 else str(n))
