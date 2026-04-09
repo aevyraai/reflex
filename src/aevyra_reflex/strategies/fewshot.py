@@ -69,6 +69,12 @@ class FewShotStrategy(Strategy):
         config: Any,
         on_iteration: Any | None = None,
     ) -> OptimizationResult:
+        if not dataset.has_ideals():
+            raise ValueError(
+                "The fewshot strategy requires labeled examples (ideal answers) to build "
+                "demonstrations. Use the iterative or pdo strategy for label-free datasets."
+            )
+
         from aevyra_reflex.strategies.iterative import _run_eval
 
         from aevyra_verdict.runner import RunConfig

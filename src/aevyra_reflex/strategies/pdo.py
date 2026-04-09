@@ -404,13 +404,8 @@ def _run_duel(
             api_key=provider_spec.get("api_key"),
             base_url=provider_spec.get("base_url"),
         )
-        # Add a dummy metric if none — we just need completions
-        if metrics:
-            for m in metrics:
-                runner.add_metric(m)
-        else:
-            from aevyra_verdict import RougeScore
-            runner.add_metric(RougeScore())
+        for m in metrics:
+            runner.add_metric(m)
 
         results = runner.run(ds, show_progress=False)
 

@@ -610,6 +610,19 @@ class PromptOptimizer:
         if not self._metrics:
             raise ValueError("No metrics added. Call add_metric() first.")
 
+        # Fail fast for label-free datasets paired with reference-based metrics.
+        if not self._dataset.has_ideals():
+            needs_ideal = [
+                m.name for m in self._metrics if getattr(m, "requires_ideal", False)
+            ]
+            if needs_ideal:
+                raise ValueError(
+                    f"Dataset has no ideal answers (label-free). "
+                    f"The following metrics require reference answers: {needs_ideal}. "
+                    f"Use LLMJudge for label-free evaluation: "
+                    f"optimizer.add_metric(LLMJudge(judge_provider=...))."
+                )
+
         # Check for Ollama and warn about parallel settings
         self._check_parallel_config()
 
