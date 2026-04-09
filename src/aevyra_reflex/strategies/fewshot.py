@@ -140,6 +140,8 @@ class FewShotStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=fs_config.bottom_k,
+                batch_size=getattr(config, "batch_size", 0),
+                iteration_seed=getattr(config, "batch_seed", 42) + i,
             )
 
             record = IterationRecord(

@@ -20,6 +20,7 @@ iteration history, and analysis.
 | `final` | `EvalSnapshot \| None` | Final verification snapshot (on held-out test set if split is enabled) |
 | `train_size` | `int` | Number of training examples used for optimization (0 if no split) |
 | `test_size` | `int` | Number of held-out test examples used for baseline and final eval (0 if no split) |
+| `batch_size` | `int` | Per-iteration mini-batch size (0 = full training set was used) |
 | `p_value` | `float \| None` | p-value from paired significance test (Wilcoxon or t-test). `None` if fewer than 2 samples or scipy not installed |
 | `is_significant` | `bool \| None` | `True` if `p_value < 0.05`. `None` when `p_value` is unavailable |
 | `total_eval_tokens` | `int` | Total tokens used by the eval model across the run |

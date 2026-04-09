@@ -144,6 +144,18 @@ def optimize(
             ),
         ),
     ] = 0.8,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            help=(
+                "Mini-batch size for each optimization iteration. 0 (default) = full training set. "
+                "When > 0, each iteration samples this many examples at random from the training data. "
+                "Speeds up per-iteration cost on large datasets; the stochasticity can also help "
+                "escape local optima. Baseline and final evals always use the full test set."
+            ),
+        ),
+    ] = 0,
     eval_runs: Annotated[
         int,
         typer.Option(
@@ -254,6 +266,11 @@ def optimize(
         typer.echo("Error: --eval-runs must be at least 1.", err=True)
         raise typer.Exit(code=1)
 
+    # Validate batch_size
+    if batch_size < 0:
+        typer.echo("Error: --batch-size must be 0 (full set) or a positive integer.", err=True)
+        raise typer.Exit(code=1)
+
     config = OptimizerConfig(
         max_iterations=max_iterations,
         score_threshold=effective_threshold,
@@ -268,6 +285,7 @@ def optimize(
         target_source=target_source,
         source_model=source_model,
         train_ratio=train_split,
+        batch_size=batch_size,
     )
     optimizer = PromptOptimizer(config=config)
     optimizer.set_dataset(ds)
@@ -347,6 +365,8 @@ def optimize(
         typer.echo(f"  Source model: {source_model} (migration mode)")
     typer.echo(f"  Target     : {threshold_display}")
     typer.echo(f"  Workers    : {max_workers}")
+    if batch_size > 0:
+        typer.echo(f"  Batch size : {batch_size} examples/iter  (mini-batch mode)")
     if eval_runs > 1:
         typer.echo(f"  Eval runs  : {eval_runs}×  (baseline + final averaged over {eval_runs} passes)")
     typer.echo("=" * 52)

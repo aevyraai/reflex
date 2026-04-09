@@ -152,6 +152,8 @@ class StructuralStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=s_config.bottom_k,
+                batch_size=getattr(config, "batch_size", 0),
+                iteration_seed=getattr(config, "batch_seed", 42) + i,
             )
 
             record = IterationRecord(
@@ -249,6 +251,9 @@ class StructuralStrategy(Strategy):
             best_variant_name = "current"
             variant_scores: dict[str, float] = {}
 
+            _iter_batch_size = getattr(config, "batch_size", 0)
+            _iter_seed = getattr(config, "batch_seed", 42) + i
+
             def _eval_variant(v_name: str, v_prompt: str) -> tuple[str, str, float]:
                 v_score, _, _toks = _run_eval(
                     prompt=v_prompt,
@@ -257,6 +262,8 @@ class StructuralStrategy(Strategy):
                     metrics=metrics,
                     run_config=run_config,
                     bottom_k=s_config.bottom_k,
+                    batch_size=_iter_batch_size,
+                    iteration_seed=_iter_seed,
                 )
                 return v_name, v_prompt, v_score
 

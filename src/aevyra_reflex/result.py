@@ -78,6 +78,7 @@ class OptimizationResult:
     # Dataset split info (filled by optimizer when train_ratio < 1.0)
     train_size: int = 0  # examples used during optimization
     test_size: int = 0   # held-out examples used for baseline and final eval
+    batch_size: int = 0  # per-iteration mini-batch size (0 = full training set)
 
     # Statistical significance (filled by optimizer after run)
     p_value: float | None = None        # p-value from paired Wilcoxon/t-test (None if n < 2 or scipy missing)
@@ -126,9 +127,13 @@ class OptimizationResult:
             lines.append("=" * 52)
             if self.train_size and self.test_size:
                 lines.append(f"  Train / test     : {self.train_size} / {self.test_size} samples")
+                if self.batch_size:
+                    lines.append(f"  Batch size       : {self.batch_size} examples/iter  (mini-batch mode)")
                 lines.append(f"  Baseline score   : {_fmt_score(self.baseline)}  (on {self.test_size}-sample test set)")
                 lines.append(f"  Final score      : {_fmt_score(self.final)}  (on {self.test_size}-sample test set)")
             else:
+                if self.batch_size:
+                    lines.append(f"  Batch size       : {self.batch_size} examples/iter  (mini-batch mode)")
                 lines.append(f"  Baseline score   : {_fmt_score(self.baseline)}")
                 lines.append(f"  Final score      : {_fmt_score(self.final)}")
             lines.append(f"  Improvement      : {sign}{imp:.4f} ({sign}{pct:.1f}%)")
@@ -650,6 +655,8 @@ class OptimizationResult:
             d["train_size"] = self.train_size
         if self.test_size:
             d["test_size"] = self.test_size
+        if self.batch_size:
+            d["batch_size"] = self.batch_size
         if self.improvement is not None:
             d["improvement"] = self.improvement
             d["improvement_pct"] = self.improvement_pct

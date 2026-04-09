@@ -242,6 +242,22 @@ class OptimizerConfig:
     Set to 1.0 to use the full dataset for everything (no split).
     Default: 0.8 (80% train / 20% test)."""
 
+    batch_size: int = 0
+    """Mini-batch size per optimization iteration. 0 (default) = full training
+    set. When > 0, each iteration samples this many examples at random from the
+    training data before running the eval. Speeds up per-iteration cost on large
+    datasets; the stochasticity can also help escape local optima. Each iteration
+    draws a fresh sample so the optimizer sees variety across the run.
+
+    Note: baseline and final verification evals always use the full test set —
+    batch_size only affects the per-iteration training evals used by the
+    optimization strategy."""
+
+    batch_seed: int = 42
+    """Base seed for reproducible mini-batch sampling. Iteration i uses
+    ``batch_seed + i``, so every iteration's batch is different but the
+    full run is deterministic and repeatable."""
+
     # --- Target from verdict ---
     target_model: str | None = None
     """Label of the model whose score we're trying to match (from verdict)."""
@@ -527,6 +543,14 @@ class PromptOptimizer:
             n_train = len(self._dataset.conversations)
             n_test = n_train
 
+        if self.config.batch_size > 0:
+            effective_batch = min(self.config.batch_size, n_train)
+            logger.info(
+                f"Mini-batch mode: {effective_batch} examples/iter "
+                f"(from {n_train} training examples) — "
+                f"baseline and final evals use full test set"
+            )
+
         # Normalise callbacks list
         _callbacks = list(callbacks or [])
 
@@ -700,6 +724,10 @@ class PromptOptimizer:
         if 0.0 < self.config.train_ratio < 1.0:
             result.train_size = n_train
             result.test_size = n_test
+
+        # Record mini-batch size when active
+        if self.config.batch_size > 0:
+            result.batch_size = self.config.batch_size
 
         # Statistical significance: paired test on per-sample scores
         p_val, is_sig = self._compute_significance(baseline, final)

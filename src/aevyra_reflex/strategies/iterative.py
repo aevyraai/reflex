@@ -74,6 +74,8 @@ class IterativeStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=config.extra_kwargs.get("bottom_k", 10),
+                batch_size=getattr(config, "batch_size", 0),
+                iteration_seed=getattr(config, "batch_seed", 42) + i,
             )
 
             # 2. Record this iteration
@@ -158,18 +160,35 @@ def _run_eval(
     metrics: list[Any],
     run_config: Any,
     bottom_k: int = 10,
+    batch_size: int = 0,
+    iteration_seed: int = 0,
 ) -> tuple[float, list[dict[str, Any]], int]:
     """Run a verdict eval with the given system prompt and return (mean_score, failing_samples, total_tokens).
 
     Injects the system prompt into every conversation in the dataset, runs
     the eval, and extracts the bottom-k scoring samples for diagnosis.
+
+    Args:
+        batch_size: If > 0, randomly sample this many examples from the dataset
+            before running the eval (mini-batch mode). 0 = use the full dataset.
+        iteration_seed: Random seed for the mini-batch sample. Pass a different
+            value each iteration to ensure each batch is distinct.
     """
+    import random as _random
+
     from aevyra_verdict import Dataset, EvalRunner
     from aevyra_verdict.dataset import Conversation, Message
 
+    # Apply mini-batch sampling if requested
+    all_convos = list(dataset.conversations)
+    if batch_size > 0 and batch_size < len(all_convos):
+        rng = _random.Random(iteration_seed)
+        indices = sorted(rng.sample(range(len(all_convos)), batch_size))
+        all_convos = [all_convos[i] for i in indices]
+
     # Inject system prompt into each conversation
     injected_convos = []
-    for convo in dataset.conversations:
+    for convo in all_convos:
         messages = list(convo.messages)
         # Replace or prepend system message
         if messages and messages[0].role == "system":
