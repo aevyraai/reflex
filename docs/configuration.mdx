@@ -77,15 +77,17 @@ All configuration goes through `OptimizerConfig`:
 from aevyra_reflex import OptimizerConfig
 
 config = OptimizerConfig(
-    strategy="auto",             # auto, iterative, structural, pdo, fewshot
-    max_iterations=10,           # total iteration budget
-    score_threshold=0.85,        # stop when score reaches this
-    train_ratio=0.8,             # 80% train / 20% held-out test
-    max_workers=4,               # parallel workers for variant evaluation
-    eval_runs=1,                 # eval passes to average (1 = single pass)
+    strategy="auto",                   # auto, iterative, structural, pdo, fewshot
+    max_iterations=10,                 # total iteration budget
+    score_threshold=0.85,              # stop when score reaches this
+    train_ratio=0.8,                   # 80% train / 20% held-out test
+    val_ratio=0.0,                     # fraction reserved for validation (0 = disabled)
+    early_stopping_patience=0,         # stop when val score stagnates for N iters (0 = disabled)
+    max_workers=4,                     # parallel workers for variant evaluation
+    eval_runs=1,                       # eval passes to average (1 = single pass)
     reasoning_model="claude-sonnet-4-20250514",
-    eval_temperature=0.0,        # temperature for target model completions
-    extra_kwargs={},             # strategy-specific parameters
+    eval_temperature=0.0,              # temperature for target model completions
+    extra_kwargs={},                   # strategy-specific parameters
 )
 ```
 
@@ -95,6 +97,8 @@ config = OptimizerConfig(
 | `max_iterations` | `10` | Maximum iterations (total budget for auto across all phases) |
 | `score_threshold` | `0.85` | Target score — optimization stops when reached. Set automatically by `--target` or `--verdict-results` |
 | `train_ratio` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
+| `val_ratio` | `0.0` | Fraction of total examples reserved as a validation set, carved from the training portion. Used to detect overfitting mid-run. Set to `0.0` to disable |
+| `early_stopping_patience` | `0` | Stop optimization early if val score has not improved for this many consecutive iterations. Only active when `val_ratio > 0`. Set to `0` to disable |
 | `max_workers` | `4` | Thread pool size for parallel evaluation |
 | `eval_runs` | `1` | Number of eval passes to run and average for the baseline and final verification. Use 3–5 for noisy tasks or small datasets. Does not affect optimization iterations |
 | `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
@@ -138,6 +142,72 @@ produces the same partition.
   With small datasets (fewer than ~20 examples), the test set may be too small
   for stable scores. In that case, use `--train-split 1.0` to disable splitting
   and rely on the score trajectory to judge improvement instead.
+</Note>
+
+## Validation split and early stopping
+
+Reflex supports a 3-way train / val / test split to detect overfitting
+mid-run. Without a validation set, a prompt can score well on training
+examples simply by overfitting to their specific patterns — the optimization
+loop has no way to notice.
+
+With a validation set, reflex evaluates each candidate prompt on the val
+examples after every iteration. If the train score climbs but val plateaus
+or declines, that's a sign the prompt is fitting the training examples
+specifically rather than generalizing. Early stopping on val plateau saves
+you compute and returns the least-overfit prompt.
+
+```bash
+# 70% train / 10% val / 20% test  (val carved from train portion)
+aevyra-reflex optimize data.jsonl prompt.md \
+  -m local/llama3.1 \
+  --train-split 0.8 \
+  --val-split 0.1
+
+# Same split, stop early when val stagnates for 3 consecutive iterations
+aevyra-reflex optimize data.jsonl prompt.md \
+  -m local/llama3.1 \
+  --train-split 0.8 \
+  --val-split 0.1 \
+  --early-stopping-patience 3
+```
+
+Python API:
+
+```python
+config = OptimizerConfig(
+    train_ratio=0.8,
+    val_ratio=0.1,
+    early_stopping_patience=3,
+)
+```
+
+The validation split is deterministic (same seed as train/test). The summary
+shows all three split sizes, a per-iteration val trajectory, and — if early
+stopping triggered — marks which iteration was actually the best:
+
+```
+  Train/val/test   : 70 / 10 / 20 samples
+  Baseline score   : 0.5500  (on 20-sample test set)
+  Final score      : 0.7100  (on 20-sample test set)
+  Improvement      : +0.1600 (+29.1%)
+  Iterations       : 6
+  Early stopped    : Yes (val score plateaued)
+  Train traj   : 0.600 → 0.650 → 0.710 → 0.720 → 0.725 → 0.724
+  Val traj     : 0.580 → 0.640 → 0.690 → 0.688 → 0.685 → 0.682
+```
+
+<Tip>
+  Use `--early-stopping-patience 2` for fast iteration or `3–4` when
+  your dataset is small and single-iteration val scores are noisy.
+  Without `--early-stopping-patience`, val scores are still tracked and
+  reported but optimization runs to completion.
+</Tip>
+
+<Note>
+  The validation set adds one extra eval call per optimization iteration.
+  With `val_ratio=0.1` on 100 examples you're evaluating 10 extra samples
+  per iteration — usually inexpensive compared to the reasoning step.
 </Note>
 
 ## Statistical significance
