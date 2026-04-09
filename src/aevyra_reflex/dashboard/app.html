@@ -864,6 +864,19 @@ async function renderRunDetail(runId) {
   statsRow.appendChild(mkStat('Strategy', optConfig.strategy || '--', null));
   if (durationSec != null) statsRow.appendChild(mkStat('Duration', fmtDuration(durationSec)));
 
+  // Dataset split stats (shown when train/test split was used)
+  const trainSize = result && result.train_size;
+  const testSize = result && result.test_size;
+  if (trainSize && testSize) {
+    statsRow.appendChild(mkStat('Train / Test', trainSize + ' / ' + testSize, null));
+  }
+
+  // Mini-batch mode (shown when batch_size > 0)
+  const batchSize = result && result.batch_size;
+  if (batchSize) {
+    statsRow.appendChild(mkStat('Batch Size', batchSize + '/iter', 'accent'));
+  }
+
   // Token usage stats (shown when result has token counts)
   const fmtTok = (n) => {
     if (!n) return '0';
