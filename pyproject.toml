@@ -50,9 +50,11 @@ all      = [
     "cohere>=5.0",
     "aevyra-verdict[all]>=0.1.0",
 ]
+stats = ["scipy>=1.10"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
+    "scipy>=1.10",
 ]
 
 [project.scripts]

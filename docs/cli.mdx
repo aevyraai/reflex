@@ -36,6 +36,7 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `--reasoning-api-key` | — | API key for the reasoning model. Also reads `REFLEX_REASONING_API_KEY` env var |
 | `--reasoning-base-url` | — | Base URL for self-hosted reasoning model endpoints |
 | `--source-model` | — | The model family this prompt was originally written for (e.g. `claude-sonnet`, `gpt-4o`). Enables migration mode — the reasoning model adapts idioms (XML tags → Markdown, role framing, etc.) for the target model |
+| `--eval-runs` | `1` | Number of eval passes to average for the baseline and final verification. Use 3–5 for noisy tasks or small datasets. Reports `mean ± std` and always tests significance |
 | `-o`, `--output` | — | Save the optimized prompt to this file |
 | `--results-json` | — | Save full results (iterations, scores, analysis) to JSON |
 | `--run-dir` | `.reflex/` | Directory for run history and checkpoints |

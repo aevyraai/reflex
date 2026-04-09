@@ -144,6 +144,17 @@ def optimize(
             ),
         ),
     ] = 0.8,
+    eval_runs: Annotated[
+        int,
+        typer.Option(
+            "--eval-runs",
+            help=(
+                "How many times to run each eval (baseline and final verification). "
+                "Scores are averaged across runs and a standard deviation is reported. "
+                "Use 3–5 for noisy tasks or small datasets. Default: 1 (single pass)."
+            ),
+        ),
+    ] = 1,
     verbose: Annotated[
         bool,
         typer.Option("-v", "--verbose", help="Show debug output."),
@@ -239,6 +250,10 @@ def optimize(
         raise typer.Exit(code=1)
 
     # Build optimizer config
+    if eval_runs < 1:
+        typer.echo("Error: --eval-runs must be at least 1.", err=True)
+        raise typer.Exit(code=1)
+
     config = OptimizerConfig(
         max_iterations=max_iterations,
         score_threshold=effective_threshold,
@@ -248,6 +263,7 @@ def optimize(
         reasoning_api_key=reasoning_api_key,
         reasoning_base_url=reasoning_base_url,
         max_workers=max_workers,
+        eval_runs=eval_runs,
         target_model=target_model_label,
         target_source=target_source,
         source_model=source_model,
@@ -331,6 +347,8 @@ def optimize(
         typer.echo(f"  Source model: {source_model} (migration mode)")
     typer.echo(f"  Target     : {threshold_display}")
     typer.echo(f"  Workers    : {max_workers}")
+    if eval_runs > 1:
+        typer.echo(f"  Eval runs  : {eval_runs}×  (baseline + final averaged over {eval_runs} passes)")
     typer.echo("=" * 52)
     typer.echo()
 
