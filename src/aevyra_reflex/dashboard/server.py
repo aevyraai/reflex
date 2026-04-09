@@ -111,6 +111,13 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
 
         source_model = config_dict.get("source_model", "").strip() or None
 
+        train_ratio = float(config_dict.get("train_ratio", 0.8))
+        val_ratio = float(config_dict.get("val_ratio", 0.0))
+        early_stopping_patience = int(config_dict.get("early_stopping_patience", 0))
+        batch_size = int(config_dict.get("batch_size", 0))
+        full_eval_steps = int(config_dict.get("full_eval_steps", 0))
+        eval_runs = int(config_dict.get("eval_runs", 1))
+
         config = OptimizerConfig(
             strategy=strategy,
             max_iterations=max_iterations,
@@ -120,6 +127,12 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             target_model=target_model_label,
             target_source=target_source or ("manual" if not verdict_path and not target_models else None),
             source_model=source_model,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            early_stopping_patience=early_stopping_patience,
+            batch_size=batch_size,
+            full_eval_steps=full_eval_steps,
+            eval_runs=eval_runs,
         )
 
         # ── Load dataset ──────────────────────────────────────────────────
@@ -386,6 +399,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                     "eval_tokens": it.eval_tokens,
                     "reasoning_tokens": it.reasoning_tokens,
                     "change_summary": getattr(it, "change_summary", ""),
+                    "val_score": it.val_score,
+                    "is_full_eval": it.is_full_eval,
                     "timestamp": it.timestamp,
                 }
                 for it in iterations

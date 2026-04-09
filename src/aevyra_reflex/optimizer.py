@@ -267,6 +267,35 @@ class OptimizerConfig:
     Recommended values: 2–4 iterations. Smaller values stop sooner (risk of
     stopping too early on noise); larger values are more conservative."""
 
+    batch_size: int = 0
+    """Mini-batch size per optimization iteration. 0 (default) = full training
+    set. When > 0, each iteration samples this many examples at random from the
+    training data before running the eval. Speeds up per-iteration cost on large
+    datasets; the stochasticity can also help escape local optima. Each iteration
+    draws a fresh sample so the optimizer sees variety across the run.
+
+    Note: baseline and final verification evals always use the full test set —
+    batch_size only affects the per-iteration training evals used by the
+    optimization strategy."""
+
+    batch_seed: int = 42
+    """Base seed for reproducible mini-batch sampling. Iteration i uses
+    ``batch_seed + i``, so every iteration's batch is different but the
+    full run is deterministic and repeatable."""
+
+    full_eval_steps: int = 0
+    """When using mini-batch mode (``batch_size > 0``), run a full training-set
+    eval every this many iterations to get an accurate checkpoint score.
+    0 (default) = never — use mini-batch scores throughout.
+
+    Example: with ``batch_size=32`` and ``full_eval_steps=5``, iterations
+    1–4 score on a 32-example batch; iteration 5 scores on the full training
+    set; iterations 6–9 use batches again; iteration 10 is a full eval; and
+    so on. Full-eval iterations are marked in the trajectory and dashboard.
+
+    Has no effect when ``batch_size=0`` (already using the full set every
+    iteration)."""
+
     # --- Target from verdict ---
     target_model: str | None = None
     """Label of the model whose score we're trying to match (from verdict)."""
@@ -623,6 +652,14 @@ class PromptOptimizer:
             n_val = 0
             n_test = n_train
 
+        if self.config.batch_size > 0:
+            effective_batch = min(self.config.batch_size, n_train)
+            logger.info(
+                f"Mini-batch mode: {effective_batch} examples/iter "
+                f"(from {n_train} training examples) — "
+                f"baseline and final evals use full test set"
+            )
+
         # Normalise callbacks list
         _callbacks = list(callbacks or [])
 
@@ -753,6 +790,8 @@ class PromptOptimizer:
                     eval_tokens=getattr(record, "eval_tokens", 0),
                     reasoning_tokens=getattr(record, "reasoning_tokens", 0),
                     change_summary=getattr(record, "change_summary", ""),
+                    val_score=getattr(record, "val_score", None),
+                    is_full_eval=getattr(record, "is_full_eval", False),
                 ))
                 _es["trajectory"].append(record.score)
                 # Update checkpoint
@@ -858,6 +897,10 @@ class PromptOptimizer:
             result.val_size = n_val
             result.val_trajectory = list(_es["val_history"])
         result.early_stopped = _early_stopped
+
+        # Record mini-batch size when active
+        if self.config.batch_size > 0:
+            result.batch_size = self.config.batch_size
 
         # Statistical significance: paired test on per-sample scores
         p_val, is_sig = self._compute_significance(baseline, final)

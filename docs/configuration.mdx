@@ -83,6 +83,9 @@ config = OptimizerConfig(
     train_ratio=0.8,                   # 80% train / 20% held-out test
     val_ratio=0.0,                     # fraction reserved for validation (0 = disabled)
     early_stopping_patience=0,         # stop when val score stagnates for N iters (0 = disabled)
+    batch_size=0,                      # 0 = full training set; >0 = examples per iteration
+    batch_seed=42,                     # base seed for mini-batch sampling
+    full_eval_steps=0,                 # full-set checkpoint every N iters (0 = disabled)
     max_workers=4,                     # parallel workers for variant evaluation
     eval_runs=1,                       # eval passes to average (1 = single pass)
     reasoning_model="claude-sonnet-4-20250514",
@@ -99,6 +102,9 @@ config = OptimizerConfig(
 | `train_ratio` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
 | `val_ratio` | `0.0` | Fraction of total examples reserved as a validation set, carved from the training portion. Used to detect overfitting mid-run. Set to `0.0` to disable |
 | `early_stopping_patience` | `0` | Stop optimization early if val score has not improved for this many consecutive iterations. Only active when `val_ratio > 0`. Set to `0` to disable |
+| `batch_size` | `0` | Mini-batch size per iteration. `0` = full training set. When > 0, each iteration samples this many examples at random from the training data |
+| `batch_seed` | `42` | Base seed for mini-batch sampling. Iteration `i` uses `batch_seed + i` so every batch is different but the run is reproducible |
+| `full_eval_steps` | `0` | When using mini-batch mode, run a full training-set eval every this many iterations. `0` = never (use mini-batch scores throughout). E.g. `5` runs a full eval on iterations 5, 10, 15, … Full-eval iterations are marked in the dashboard |
 | `max_workers` | `4` | Thread pool size for parallel evaluation |
 | `eval_runs` | `1` | Number of eval passes to run and average for the baseline and final verification. Use 3–5 for noisy tasks or small datasets. Does not affect optimization iterations |
 | `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
@@ -209,6 +215,59 @@ stopping triggered — marks which iteration was actually the best:
   With `val_ratio=0.1` on 100 examples you're evaluating 10 extra samples
   per iteration — usually inexpensive compared to the reasoning step.
 </Note>
+
+## Mini-batch mode
+
+By default every optimization iteration evaluates the full training set. For
+large datasets this can be slow — each iteration costs `n_train` LLM calls.
+Mini-batch mode samples a random subset each round:
+
+```bash
+# 32 examples per iteration
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --batch-size 32
+
+# Combine with train/test split
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \
+  --train-split 0.8 --batch-size 40
+```
+
+```python
+config = OptimizerConfig(
+    batch_size=32,        # examples per iteration; 0 = full training set (default)
+    batch_seed=42,        # base seed — iteration i uses batch_seed + i
+    full_eval_steps=5,    # full training-set eval every 5 iterations (0 = never)
+)
+```
+
+Each iteration draws a fresh sample seeded by `batch_seed + i`, so the
+optimizer sees different examples each round. The stochasticity can also
+help escape local optima by smoothing out noise from individual examples.
+
+Baseline and final verification evals always use the **full test set** —
+`batch_size` only affects the per-iteration training evals used by the
+optimization strategy.
+
+### Periodic full-eval checkpoints
+
+Mini-batch scores are noisy — a single good or bad batch can skew the
+trajectory. Use `--full-eval-steps` to periodically score the full
+training set for an accurate checkpoint:
+
+```bash
+# Batch of 32 per iter; full eval every 5 iterations
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \
+  --batch-size 32 --full-eval-steps 5
+```
+
+Iterations 5, 10, 15, … score the full training set; all others score
+the mini-batch. Full-eval iterations are marked with a **◈ full eval**
+badge in the dashboard flow graph.
+
+<Tip>
+  A good starting point is 20–50% of your training set size. Too small a
+  batch makes the per-iteration score noisy; too large gives diminishing
+  returns over the full set.
+</Tip>
 
 ## Statistical significance
 

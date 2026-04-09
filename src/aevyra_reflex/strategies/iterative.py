@@ -60,13 +60,27 @@ class IterativeStrategy(Strategy):
             max_tokens=config.max_tokens,
         )
 
+        _batch_size = getattr(config, "batch_size", 0)
+        _batch_seed = getattr(config, "batch_seed", 42)
+        _full_eval_steps = getattr(config, "full_eval_steps", 0)
+
         for i in range(config.max_iterations):
             tag = f"[iterative][iter {i + 1}/{config.max_iterations}]"
             logger.info(f"{tag} Starting")
 
+            # Determine whether this iteration should use the full training set
+            # (periodic full-eval checkpoint) or a mini-batch sample.
+            is_full_eval = (
+                _batch_size > 0
+                and _full_eval_steps > 0
+                and (i + 1) % _full_eval_steps == 0
+            )
+            effective_batch = 0 if is_full_eval else _batch_size
+
             # 1. Run eval with current prompt
             reasoning_before = getattr(agent, "tokens_used", 0)
-            logger.info(f"{tag} Running eval...")
+            eval_label = "full-eval checkpoint" if is_full_eval else "eval"
+            logger.info(f"{tag} Running {eval_label}...")
             score, failing_samples, eval_tokens = _run_eval(
                 prompt=current_prompt,
                 dataset=dataset,
@@ -74,6 +88,8 @@ class IterativeStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=config.extra_kwargs.get("bottom_k", 10),
+                batch_size=effective_batch,
+                iteration_seed=_batch_seed + i,
             )
 
             # 2. Record this iteration
@@ -83,6 +99,7 @@ class IterativeStrategy(Strategy):
                 score=score,
                 reasoning=previous_reasoning,
                 eval_tokens=eval_tokens,
+                is_full_eval=is_full_eval,
             )
             iterations.append(record)
             if on_iteration:
@@ -158,18 +175,35 @@ def _run_eval(
     metrics: list[Any],
     run_config: Any,
     bottom_k: int = 10,
+    batch_size: int = 0,
+    iteration_seed: int = 0,
 ) -> tuple[float, list[dict[str, Any]], int]:
     """Run a verdict eval with the given system prompt and return (mean_score, failing_samples, total_tokens).
 
     Injects the system prompt into every conversation in the dataset, runs
     the eval, and extracts the bottom-k scoring samples for diagnosis.
+
+    Args:
+        batch_size: If > 0, randomly sample this many examples from the dataset
+            before running the eval (mini-batch mode). 0 = use the full dataset.
+        iteration_seed: Random seed for the mini-batch sample. Pass a different
+            value each iteration to ensure each batch is distinct.
     """
+    import random as _random
+
     from aevyra_verdict import Dataset, EvalRunner
     from aevyra_verdict.dataset import Conversation, Message
 
+    # Apply mini-batch sampling if requested
+    all_convos = list(dataset.conversations)
+    if batch_size > 0 and batch_size < len(all_convos):
+        rng = _random.Random(iteration_seed)
+        indices = sorted(rng.sample(range(len(all_convos)), batch_size))
+        all_convos = [all_convos[i] for i in indices]
+
     # Inject system prompt into each conversation
     injected_convos = []
-    for convo in dataset.conversations:
+    for convo in all_convos:
         messages = list(convo.messages)
         # Replace or prepend system message
         if messages and messages[0].role == "system":

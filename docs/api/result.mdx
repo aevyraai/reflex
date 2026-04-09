@@ -23,6 +23,7 @@ iteration history, and analysis.
 | `val_size` | `int` | Number of validation examples tracked per-iteration (0 if `val_ratio=0`) |
 | `val_trajectory` | `list[float]` | Val set mean score after each optimization iteration (empty if no val split) |
 | `early_stopped` | `bool` | `True` if optimization was stopped early because val score plateaued |
+| `batch_size` | `int` | Per-iteration mini-batch size (0 = full training set was used) |
 | `p_value` | `float \| None` | p-value from paired significance test (Wilcoxon or t-test). `None` if fewer than 2 samples or scipy not installed |
 | `is_significant` | `bool \| None` | `True` if `p_value < 0.05`. `None` when `p_value` is unavailable |
 | `total_eval_tokens` | `int` | Total tokens used by the eval model across the run |

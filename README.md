@@ -272,6 +272,44 @@ aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 0
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 1.0
 ```
 
+## Mini-batch mode for large datasets
+
+By default every optimization iteration evaluates the full training set. On large
+datasets this can be slow. `--batch-size` tells reflex to randomly sample a subset
+each iteration instead:
+
+```bash
+# Sample 32 examples per iteration (speeds up each round significantly)
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --batch-size 32
+
+# Combine with train/test split
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 \
+  --train-split 0.8 --batch-size 40
+```
+
+Or via the Python API:
+
+```python
+config = OptimizerConfig(
+    batch_size=32,     # examples per iteration (0 = full training set)
+    batch_seed=42,     # base seed; iteration i uses batch_seed + i
+)
+```
+
+Each iteration draws a fresh random sample (seeded by `batch_seed + i`), so the
+optimizer sees variety across the run. The stochasticity can also help escape
+local optima. Baseline and final verification evals always use the **full test
+set** — `batch_size` only affects the per-iteration training evals.
+
+The batch size appears in the results summary:
+
+```
+  Train / test     : 800 / 200 samples
+  Batch size       : 32 examples/iter  (mini-batch mode)
+  Baseline score   : 0.5821  (on 200-sample test set)
+  Final score      : 0.8612  (on 200-sample test set)
+```
+
 ## Migrating a prompt to a new model
 
 If you've written a prompt for Claude and want to optimize it for Llama or GPT-4o,

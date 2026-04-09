@@ -105,6 +105,10 @@ class FewShotStrategy(Strategy):
         failing_samples: list = []
         iterations: list[IterationRecord] = []
 
+        _batch_size = getattr(config, "batch_size", 0)
+        _batch_seed = getattr(config, "batch_seed", 42)
+        _full_eval_steps = getattr(config, "full_eval_steps", 0)
+
         for i in range(config.max_iterations):
             logger.info(f"Iteration {i + 1}/{config.max_iterations}")
 
@@ -132,6 +136,14 @@ class FewShotStrategy(Strategy):
             # Build the composite prompt
             composite_prompt = _build_fewshot_prompt(instruction, selected)
 
+            # Determine full-eval checkpoint or mini-batch for this iteration
+            is_full_eval = (
+                _batch_size > 0
+                and _full_eval_steps > 0
+                and (i + 1) % _full_eval_steps == 0
+            )
+            effective_batch = 0 if is_full_eval else _batch_size
+
             # Evaluate
             score, failing_samples, eval_tokens = _run_eval(
                 prompt=composite_prompt,
@@ -140,6 +152,8 @@ class FewShotStrategy(Strategy):
                 metrics=metrics,
                 run_config=run_config,
                 bottom_k=fs_config.bottom_k,
+                batch_size=effective_batch,
+                iteration_seed=_batch_seed + i,
             )
 
             record = IterationRecord(
@@ -148,6 +162,7 @@ class FewShotStrategy(Strategy):
                 score=score,
                 reasoning=f"Selected {len(selected)} examples",
                 eval_tokens=eval_tokens,
+                is_full_eval=is_full_eval,
             )
             iterations.append(record)
             if on_iteration:

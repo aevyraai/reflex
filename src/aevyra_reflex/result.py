@@ -34,6 +34,7 @@ class IterationRecord:
     reasoning_tokens: int = 0  # tokens used by the reasoning model this iteration
     change_summary: str = ""   # one-liner: what the reasoning model changed this iteration
     val_score: float | None = None  # validation set score (None when val_ratio=0)
+    is_full_eval: bool = False  # True when scored on the full training set (periodic checkpoint), not a mini-batch
 
 
 @dataclass
@@ -79,6 +80,7 @@ class OptimizationResult:
     # Dataset split info (filled by optimizer when train_ratio < 1.0)
     train_size: int = 0  # examples used during optimization
     test_size: int = 0   # held-out examples used for baseline and final eval
+    batch_size: int = 0  # per-iteration mini-batch size (0 = full training set)
 
     # Validation split info (filled by optimizer when val_ratio > 0)
     val_size: int = 0                     # examples in the validation set
@@ -137,9 +139,13 @@ class OptimizationResult:
                     )
                 else:
                     lines.append(f"  Train / test     : {self.train_size} / {self.test_size} samples")
+                if self.batch_size:
+                    lines.append(f"  Batch size       : {self.batch_size} examples/iter  (mini-batch mode)")
                 lines.append(f"  Baseline score   : {_fmt_score(self.baseline)}  (on {self.test_size}-sample test set)")
                 lines.append(f"  Final score      : {_fmt_score(self.final)}  (on {self.test_size}-sample test set)")
             else:
+                if self.batch_size:
+                    lines.append(f"  Batch size       : {self.batch_size} examples/iter  (mini-batch mode)")
                 lines.append(f"  Baseline score   : {_fmt_score(self.baseline)}")
                 lines.append(f"  Final score      : {_fmt_score(self.final)}")
             lines.append(f"  Improvement      : {sign}{imp:.4f} ({sign}{pct:.1f}%)")
@@ -638,6 +644,7 @@ class OptimizationResult:
                     "eval_tokens": r.eval_tokens,
                     "reasoning_tokens": r.reasoning_tokens,
                     **({"val_score": r.val_score} if r.val_score is not None else {}),
+                    **({"is_full_eval": True} if r.is_full_eval else {}),
                 }
                 for r in self.iterations
             ],
@@ -672,6 +679,8 @@ class OptimizationResult:
             d["val_trajectory"] = self.val_trajectory
         if self.early_stopped:
             d["early_stopped"] = self.early_stopped
+        if self.batch_size:
+            d["batch_size"] = self.batch_size
         if self.improvement is not None:
             d["improvement"] = self.improvement
             d["improvement_pct"] = self.improvement_pct
