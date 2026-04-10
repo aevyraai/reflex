@@ -2,35 +2,62 @@
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
 
-Agentic prompt optimization. Reflex reads your eval results, diagnoses why
-your model is underperforming, and rewrites the prompt until the scores
-match your target — no manual prompt engineering required.
-
-Point it at a dataset, a model, and a target score. Reflex figures out the rest.
+Prompt optimization that fits in your workflow. One `pip install`, one command,
+no YAML files, no framework dependencies — just a better prompt.
 
 ```bash
+pip install aevyra-reflex
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
 ```
 
-Reflex is an agent, not a script. It observes eval results, reasons about
-failure patterns, and adaptively picks the right optimization technique at
-each step. By default it draws from four axes:
+Reflex reads your eval results, diagnoses why your model is underperforming,
+and rewrites the prompt until the scores match your target. Works with any
+model — local Ollama, OpenAI, Anthropic, Gemini, or any OpenAI-compatible endpoint.
 
-- **structural** — reorganize the prompt's layout, formatting, and information
-  hierarchy. Inspired by Microsoft's SAMMO.
-- **iterative** — diagnose specific failure patterns and surgically revise the
-  wording.
-- **fewshot** — curate the most informative few-shot examples from the dataset.
-  Inspired by Stanford's DSPy.
-- **pdo** — tournament-style search over prompt variants using dueling bandits
-  with Thompson sampling. Based on Meta's PDO paper
-  ([arXiv:2510.13907](https://arxiv.org/abs/2510.13907)).
+## Dashboard
 
-Each axis can also be used standalone with `-s iterative`, `-s pdo`, etc.
+Explore your runs visually with the built-in dashboard — no separate server to
+deploy, no build step, just one command:
 
-All evaluation runs through [aevyra-verdict](https://github.com/aevyraai/verdict).
-For reasoning, reflex uses Claude by default — but you can swap in any model,
-including local ones like Qwen3-8B or DeepSeek-R1.
+```bash
+aevyra-reflex dashboard
+```
+
+Opens `http://localhost:8128` with score trajectory charts, prompt diffs
+between iterations, reasoning analysis, token usage, and config snapshots.
+Click into any run to see exactly what the reasoning model changed and why.
+
+**Branch runs** let you pick any iteration from a completed or interrupted run
+and continue optimizing from that point with a different strategy — no
+baseline re-evaluation required. Hover over any iteration card and click `⎇`.
+
+```bash
+aevyra-reflex dashboard --port 9000 --run-dir ./experiments/.reflex
+```
+
+## Why reflex
+
+**No config files.** No YAML. No framework to learn. Point it at a dataset and
+a prompt file and it runs.
+
+**Lightweight.** No heavy framework dependencies. Just Python, standard
+library, and `numpy` for PDO math. The optimizer installs in seconds and has
+no opinion about the rest of your stack.
+
+**Runs 100% locally.** Ollama is a first-class citizen. Use a local reasoning
+model so nothing leaves your machine:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model ollama/qwen3:8b \
+  -o best_prompt.md
+```
+
+**Agentic, not scripted.** Reflex observes eval results, reasons about failure
+patterns, and adaptively picks the right optimization technique at each step.
+Each iteration the reasoning model explains *why* it made the change — you
+learn from the run, not just get an output.
 
 ## Install
 
@@ -39,13 +66,12 @@ pip install aevyra-reflex
 ```
 
 Requires `aevyra-verdict`. By default, uses Claude for reasoning
-(`ANTHROPIC_API_KEY` env var), but you can use any model — see
-[Choosing a reasoning model](#choosing-a-reasoning-model) below.
+(`ANTHROPIC_API_KEY`). Swap in any model with `--reasoning-model`.
 
 ## Quick start
 
-One command does the whole thing — runs a baseline eval, optimizes the prompt,
-re-evaluates with the improved prompt, and shows a before/after comparison:
+One command runs baseline eval, optimizes the prompt, re-evaluates, and shows
+a before/after comparison:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
@@ -94,23 +120,15 @@ Step 3/3  Verifying...
 Best prompt saved to: best_prompt.md
 ```
 
-Or use the Python API:
+Or the Python API — five lines:
 
 ```python
 from aevyra_verdict import Dataset, RougeScore
 from aevyra_reflex import PromptOptimizer, OptimizerConfig
 
-dataset = Dataset.from_jsonl("dataset.jsonl")
-
-config = OptimizerConfig(
-    strategy="auto",             # or "iterative", "pdo", "fewshot", "structural"
-    max_iterations=10,
-    score_threshold=0.85,
-)
-
 result = (
-    PromptOptimizer(config)
-    .set_dataset(dataset)
+    PromptOptimizer(OptimizerConfig(strategy="auto", max_iterations=10))
+    .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
     .add_provider("openai", "gpt-5.4-nano")
     .add_metric(RougeScore())
     .run("You are a helpful assistant.")
@@ -122,51 +140,49 @@ print(result.best_prompt)
 
 ## How it works
 
+Reflex is an agent, not a script. It draws from four optimization axes:
+
+- **iterative** — diagnose specific failure patterns and surgically revise the
+  wording. Label-free aware: shifts automatically from reference comparison to
+  quality/instruction-following analysis when the dataset has no ideal answers.
+- **pdo** — tournament-style search over prompt variants using dueling bandits
+  with Thompson sampling and adaptive multi-ranker fusion
+  ([arXiv:2510.13907](https://arxiv.org/abs/2510.13907)).
+- **structural** — reorganize the prompt's layout, formatting, and information
+  hierarchy.
+- **fewshot** — curate the most informative few-shot examples from the dataset.
+
+Each axis can be used standalone with `-s iterative`, `-s pdo`, etc.
+
 ### Auto strategy (default)
 
-The auto strategy runs a multi-phase pipeline:
-
 1. Run a baseline eval to measure the starting score
-2. The reasoning model analyzes the prompt's weaknesses and recommends an optimization axis
-3. Apply that axis for a few iterations (each axis has its own budget)
-4. Re-evaluate — if the threshold is met, stop
-5. Otherwise the reasoning model picks the next axis based on what changed
-6. Repeat until the global iteration budget runs out
+2. The reasoning model analyzes weaknesses and recommends an optimization axis
+3. Apply that axis for a few iterations (each has its own budget)
+4. Re-evaluate — if threshold is met, stop; otherwise pick the next axis
+5. Repeat until the global budget runs out
 
-A typical auto run might look like: structural (fix formatting) → iterative
-(fix wording) → fewshot (add examples) — each phase building on the previous
-one's improvements.
+A typical auto run: structural (fix formatting) → iterative (fix wording) →
+fewshot (add examples), each phase building on the previous.
 
 ### Iterative strategy
 
-Each iteration:
-
-1. Inject the current system prompt into every conversation in the dataset
-2. Run completions against the target model via verdict
-3. Score all responses with the configured metrics
-4. Identify the worst-scoring samples
-5. Send them to the reasoning model: "here's the prompt, here are the failures —
-   what's wrong and how should we fix it?"
-6. The reasoning model proposes a revised prompt grounded in the actual failure patterns
-7. If the score meets the threshold, stop. Otherwise repeat with the new prompt.
-
-The reasoning model maintains a **causal rewrite log** across iterations — a compact record of what changed each round and whether it helped. From iteration 2 onwards this history is fed back into the prompt, so the model knows which edits helped (✓), had no effect (✗ no effect), or hurt (✗ hurt) and can avoid repeating dead ends:
+Each iteration: eval the current prompt, identify worst-scoring samples, send
+them to the reasoning model for diagnosis, get a revised prompt back. The
+reasoning model maintains a **causal rewrite log** across iterations so it
+knows what helped, had no effect, or hurt — and avoids repeating dead ends:
 
 ```
 Iter 1 (score: 0.6234, Δ+0.0871 — ✓ helped): Added numbered reasoning steps
 Iter 2 (score: 0.7105, Δ+0.0029 — ✗ no effect): Added "think carefully" instruction
 ```
 
-The iterative strategy is **label-free aware**: when the dataset has no ideal
-answers, the diagnosis prompt automatically shifts its framing — telling the
-reasoning model that scores come from an LLM judge and that it should focus on
-quality, clarity, format, and instruction-following failures rather than
-reference comparison. This makes iterative a good default strategy for
-open-ended tasks like chat, summarization, or creative writing.
-
 ### PDO strategy
 
-Maintains a pool of candidate prompts and uses dueling bandits to find the best:
+Maintains a pool of candidate prompts and runs dueling bandits to find the
+best. Thompson sampling picks pairs to duel; an LLM judge picks the winner
+per example; the win matrix drives rankings. Top prompts are periodically
+mutated to generate new candidates.
 
 1. Generate an initial pool of diverse prompts from the base instruction
 2. Each round, Thompson sampling selects two prompts to duel
@@ -188,383 +204,162 @@ for this dataset. Each round's log shows the current weight distribution:
 Ranking weights: copeland=28%, borda=22%, elo=31%, avg_winrate=19% (dominant: elo)
 ```
 
-The PDO strategy is inspired by Meta's Prompt Duel Optimizer but rebuilt on
-top of verdict's evaluation infrastructure.
-
 ### Few-shot strategy
 
-Optimizes *which examples* to include in the prompt:
-
-1. Bootstrap: run the bare instruction and collect the highest-scoring samples
-   as candidate exemplars
-2. Ask the reasoning model to select a diverse, informative subset of examples
-3. Build a composite prompt: instruction + curated few-shot examples
-4. Run eval, identify remaining failures
-5. The reasoning model swaps examples to better cover the failure modes
-6. Periodically re-bootstrap to discover new exemplar candidates
+Bootstraps the highest-scoring samples as exemplar candidates, then
+iteratively swaps examples to better cover failure modes.
 
 ### Structural strategy
 
-Optimizes the *organization and formatting* of the prompt:
-
-1. Run eval with the current prompt structure
-2. The reasoning model analyzes structural weaknesses (section ordering,
-   formatting, hierarchy, constraint placement)
-3. Generate variants using different transformations (markdown headers,
-   XML tags, flat paragraphs, role/task/format split, etc.)
-4. The reasoning model also generates a free-form structural improvement
-5. Evaluate all variants; keep the best
-6. Repeat, accumulating knowledge about which structures help or hurt
-
-Inspired by Microsoft's SAMMO framework for structure-aware prompt optimization.
+Generates variants using different structural transformations (markdown
+headers, XML tags, flat paragraphs, role/task/format splits) and keeps
+whichever improves the score.
 
 ## Parallel execution
 
-Strategies like `structural` and `pdo` evaluate multiple prompt variants per
-iteration. These variants are evaluated **in parallel** using threads. For cloud
-APIs (OpenAI, Anthropic) this works out of the box.
-
-For **Ollama**, you need to tell it to handle parallel requests — by default it
-processes one request at a time:
+`structural` and `pdo` evaluate multiple variants per iteration in parallel.
+For **Ollama**, enable parallel inference first:
 
 ```bash
-# 1. Start Ollama with parallel inference enabled
 OLLAMA_NUM_PARALLEL=4 ollama serve
-
-# 2. Tell reflex to use matching parallelism
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.2:8b \
-  --max-workers 4 \
-  -o best_prompt.md
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.2:8b --max-workers 4
 ```
 
-Higher `OLLAMA_NUM_PARALLEL` uses more VRAM. For a 8B model on a GPU with 8GB+
-VRAM, 4 is a good starting point. For 1B models, you can go higher.
-
-If you don't set `OLLAMA_NUM_PARALLEL`, reflex auto-detects this and falls back
-to sequential execution (1 worker), logging a warning with setup instructions.
+If `OLLAMA_NUM_PARALLEL` is not set, reflex auto-detects and falls back to
+sequential execution with a warning.
 
 ## Run persistence and resume
 
-Every run is checkpointed to a `.reflex/` directory. If a run crashes or
-is interrupted, resume from where it left off — no lost work:
+Every run is checkpointed to `.reflex/`. Resume from any interruption:
 
 ```bash
-# Resume the latest interrupted run
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --resume
-
-# Resume a specific run by ID
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --resume-from 003
-
-# List all runs
 aevyra-reflex runs
 ```
 
-```
-  ID  Status        Strategy      Iters  Baseline      Best     Final  Dataset
-------------------------------------------------------------------------------------------
- 001  ✓ completed   auto              5    0.5821    0.8612    0.8612  dataset.jsonl
- 002  ⚡ interrupted  iterative        3    0.6100    0.7450         —  dataset.jsonl
-```
-
-Each run captures its config, dataset path, initial prompt, and per-iteration
-state, so every experiment is reproducible and comparable.
-
 ## Honest eval scores with train/test split
 
-By default, reflex holds out 20% of your dataset for evaluation. The optimization
-loop only sees the training examples — the held-out test set is used exclusively
-for the baseline and final scores you see in the results summary.
-
-This prevents the reported improvement from being inflated by the same examples
-that drove the rewrites. The split is deterministic (seed 42), so results are
-reproducible.
+Reflex holds out 20% of your dataset for evaluation by default. The
+optimization loop only sees training examples — preventing inflated scores.
 
 ```bash
-# Default: 80/20 split
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1
-
-# Custom split
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1                   # 80/20 split
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 0.9
-
-# No split (useful for very small datasets < 20 examples)
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 1.0
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 1.0 # no split
 ```
 
 ## Mini-batch mode for large datasets
 
-By default every optimization iteration evaluates the full training set. On large
-datasets this can be slow. `--batch-size` tells reflex to randomly sample a subset
-each iteration instead:
-
 ```bash
-# Sample 32 examples per iteration (speeds up each round significantly)
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --batch-size 32
-
-# Combine with train/test split
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 \
-  --train-split 0.8 --batch-size 40
 ```
 
-Or via the Python API:
-
-```python
-config = OptimizerConfig(
-    batch_size=32,     # examples per iteration (0 = full training set)
-    batch_seed=42,     # base seed; iteration i uses batch_seed + i
-)
-```
-
-Each iteration draws a fresh random sample (seeded by `batch_seed + i`), so the
-optimizer sees variety across the run. The stochasticity can also help escape
-local optima. Baseline and final verification evals always use the **full test
-set** — `batch_size` only affects the per-iteration training evals.
-
-The batch size appears in the results summary:
-
-```
-  Train / test     : 800 / 200 samples
-  Batch size       : 32 examples/iter  (mini-batch mode)
-  Baseline score   : 0.5821  (on 200-sample test set)
-  Final score      : 0.8612  (on 200-sample test set)
-```
+Each iteration samples `--batch-size` examples at random. Baseline and final
+verification always use the full test set.
 
 ## Migrating a prompt to a new model
 
-If you've written a prompt for Claude and want to optimize it for Llama or GPT-4o,
-use `--source-model` to tell reflex which model family it's migrating *from*. The
-reasoning model uses this to adapt model-family idioms automatically — XML tags to
-Markdown headers, role framing structure, verbosity adjustments, and so on:
+Use `--source-model` to tell reflex which model family the prompt was written
+for. The reasoning model adapts idioms automatically:
 
 ```bash
-# Migrate a Claude prompt to Llama 3.1
 aevyra-reflex optimize dataset.jsonl claude_prompt.md \
-  -m local/llama3.1 \
-  --source-model claude-sonnet \
-  -o llama_prompt.md
+  -m local/llama3.1 --source-model claude-sonnet -o llama_prompt.md
 
-# Migrate a GPT-4o prompt to Qwen3
 aevyra-reflex optimize dataset.jsonl gpt4o_prompt.md \
-  -m local/qwen3:8b \
-  --source-model gpt-4o \
-  -o qwen3_prompt.md
+  -m local/qwen3:8b --source-model gpt-4o -o qwen3_prompt.md
 ```
-
-Or via the Python API:
-
-```python
-config = OptimizerConfig(
-    strategy="iterative",
-    source_model="claude-sonnet",   # prompt was written for this model
-)
-```
-
-Without `--source-model`, reflex still optimizes the prompt — it just won't have
-the explicit migration context to guide its rewrites.
 
 ## Validation split and early stopping
 
-Add a validation set to detect overfitting mid-run. Reflex evaluates each
-candidate prompt on the val examples after every iteration and logs both the
-train and val scores. If train keeps climbing but val plateaus, the prompt is
-fitting training examples specifically. Use `--early-stopping-patience` to
-stop automatically when that happens:
-
 ```bash
-# 3-way split: 70% train / 10% val / 20% test
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --train-split 0.8 \
-  --val-split 0.1
-
-# Same split, stop early when val stagnates for 3 consecutive iterations
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --train-split 0.8 \
-  --val-split 0.1 \
-  --early-stopping-patience 3
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 \
+  --train-split 0.8 --val-split 0.1 --early-stopping-patience 3
 ```
-
-The summary shows the full picture:
-
-```
-  Train/val/test   : 70 / 10 / 20 samples
-  Baseline score   : 0.5500  (on 20-sample test set)
-  Final score      : 0.7100  (on 20-sample test set)
-  Improvement      : +0.1600 (+29.1%)
-  Iterations       : 6
-  Early stopped    : Yes (val score plateaued)
-  Train traj   : 0.600 → 0.650 → 0.710 → 0.720 → 0.725 → 0.724
-  Val traj     : 0.580 → 0.640 → 0.690 → 0.688 → 0.685 → 0.682
-```
-
-When early stopping triggers, reflex returns the prompt with the best
-validation score — not the latest one — so the final prompt generalizes
-rather than fitting the training examples specifically.
 
 ## Statistical significance
 
-After every run, reflex tests whether the improvement is real or noise — a
-paired test on per-sample scores (Wilcoxon signed-rank via scipy, paired t-test
-fallback). The result appears in the summary:
+After every run, reflex tests whether the improvement is real or noise
+(Wilcoxon signed-rank, paired t-test fallback):
 
 ```
-  Baseline score   : 0.5821
-  Final score      : 0.8612
-  Improvement      : +0.2791 (+47.9%)
   Significance     : p=0.0021  ✓ significant (α=0.05, paired test)
 ```
 
-For noisy tasks where LLM responses vary run-to-run, average multiple eval
-passes with `--eval-runs`:
-
 ```bash
-# Average 3 eval passes for baseline and final, report mean ± std
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --eval-runs 3
-```
-
-```
-  Baseline score   : 0.5821 ± 0.0180  (3 runs)
-  Final score      : 0.8612 ± 0.0110  (3 runs)
-```
-
-Install scipy for the Wilcoxon test (recommended); the t-test fallback works
-without it:
-
-```bash
-pip install "aevyra-reflex[stats]"
+pip install "aevyra-reflex[stats]"   # enables Wilcoxon test
 ```
 
 ## Choosing a reasoning model
 
-By default, reflex uses Claude Sonnet for reasoning — analyzing failures,
-proposing prompt rewrites, and deciding which strategy to apply. You can swap
-in any model with `--reasoning-model`:
-
 ```bash
-# Gemini 2.0 Flash — fast and cost-effective (GOOGLE_API_KEY)
+# Ollama — local reasoning, nothing leaves your machine
+# Qwen3:8b is the recommended local reasoning model
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --reasoning-model gemini/gemini-2.0-flash \
-  -o best_prompt.md
+  -m local/llama3.2:1b --reasoning-model ollama/qwen3:8b
 
-# Gemini 2.5 Pro — strongest Gemini reasoning model
+# Gemma4 e4b — good alternative, especially for multilingual tasks
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --reasoning-model gemini/gemini-2.5-pro \
-  -o best_prompt.md
+  -m local/llama3.2:1b --reasoning-model ollama/gemma4:e4b
 
-# Use Qwen3-8B locally via Ollama (good balance of reasoning + speed)
+# DeepSeek R1 — stronger on math and logic-heavy tasks
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.2:1b \
-  --reasoning-model ollama/qwen3:8b \
-  -o best_prompt.md
-
-# DeepSeek R1 distill for stronger math/logic reasoning
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.2:1b \
-  --reasoning-model ollama/deepseek-r1:8b \
-  -o best_prompt.md
+  -m local/llama3.2:1b --reasoning-model ollama/deepseek-r1:8b
 
 # OpenAI
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --reasoning-model openai/gpt-4o \
-  -o best_prompt.md
+  -m local/llama3.1 --reasoning-model openai/gpt-4o
 
-# Any OpenAI-compatible endpoint (vLLM, TGI, etc.)
+# Gemini 2.0 Flash — fast and cost-effective (GOOGLE_API_KEY)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 --reasoning-model gemini/gemini-2.0-flash
+
+# Gemini 2.5 Pro — strongest Gemini reasoning model
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 --reasoning-model gemini/gemini-2.5-pro
+
+# Any OpenAI-compatible endpoint (vLLM, TGI, LM Studio, etc.)
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 \
   --reasoning-model openai/my-model \
   --reasoning-base-url http://localhost:8000/v1
 ```
 
-Or via the Python API:
+## Label-free evaluation
+
+Works with datasets that have no reference answers — summarization, chat,
+creative writing. Use an LLM judge instead of ROUGE/BLEU:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 --judge openai/gpt-4o -o best_prompt.md
+```
 
 ```python
-config = OptimizerConfig(
-    reasoning_model="qwen3:8b",
-    reasoning_provider="ollama",
+from aevyra_verdict import LLMJudge
+
+result = (
+    PromptOptimizer(OptimizerConfig(strategy="auto"))
+    .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
+    .add_provider("openai", "gpt-4o-mini")
+    .add_metric(LLMJudge(judge_provider="openai", judge_model="gpt-4o"))
+    .run("You are a helpful assistant.")
 )
 ```
 
-Qwen3-8B is a strong choice for local reasoning — it supports a thinking mode
-for complex analysis, 131K context, and runs well on consumer GPUs. For harder
-tasks, DeepSeek-R1-0528-Qwen3-8B edges it out on math/logic benchmarks.
+All strategies except `fewshot` work without labels. `auto` excludes fewshot
+automatically for label-free datasets.
 
-## Dashboard
-
-Explore your runs visually with the built-in web dashboard:
+## CLI reference
 
 ```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --max-iterations 20
+aevyra-reflex optimize dataset.jsonl prompt.md -m openai/gpt-5.4-nano -s iterative --metric rouge
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s pdo --max-iterations 50
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --judge openai/gpt-4o
 aevyra-reflex dashboard
-```
-
-Opens a local web UI at `http://localhost:8128` showing all your runs with
-score trajectory charts, prompt diffs between iterations, reasoning analysis,
-and config snapshots. Click into any run to drill down into individual
-iterations and see exactly what the reasoning model changed and why.
-
-Each iteration card shows **eval token** and **reasoning token** counts so you
-can track model usage without leaving the UI.
-
-**Branch runs** let you pick any iteration from a completed or interrupted run
-and continue optimizing from that point with a different strategy — no
-baseline re-evaluation required. Hover over any iteration card in the flow
-graph and click the `⎇` button that appears. Branch runs appear indented
-directly below their parent in the runs list.
-
-```bash
-# Custom port or run directory
-aevyra-reflex dashboard --port 9000 --run-dir ./experiments/.reflex
-```
-
-## CLI
-
-```bash
-# Auto (default) — just run it, auto picks the strategies
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --max-iterations 20 \
-  --max-workers 4 \
-  -o best_prompt.md
-
-# Iterative only
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m openai/gpt-5.4-nano \
-  -s iterative \
-  --metric rouge \
-  --threshold 0.85 \
-  -o best_prompt.md
-
-# PDO with more rounds
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  -s pdo \
-  --max-iterations 50 \
-  -o best_prompt.md \
-  --results-json results.json
-
-# Few-shot example optimization
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  -s fewshot \
-  -o best_prompt.md
-
-# Structural optimization
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  -s structural \
-  -o best_prompt.md
-
-# Add an LLM judge alongside ROUGE
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m openai/gpt-5.4-nano \
-  --metric rouge \
-  --judge openai/gpt-5.4 \
-  -o best_prompt.md
+aevyra-reflex runs
 ```
 
 ## Configuration
@@ -572,33 +367,16 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 ```python
 from aevyra_reflex import OptimizerConfig
 
-# Auto (default) — just set budget and threshold, auto handles the rest
-config = OptimizerConfig(
-    strategy="auto",
-    max_iterations=20,          # total budget across all phases
-    score_threshold=0.85,
-    extra_kwargs={
-        "max_phases": 4,        # max number of optimization phases
-        "start_structural": True,  # always start with structural
-        # Override per-phase budgets:
-        # "phase_budgets": {"structural": 3, "iterative": 4, "fewshot": 3, "pdo": 15},
-    },
-)
+# Auto — set budget and threshold, auto handles the rest
+config = OptimizerConfig(strategy="auto", max_iterations=20, score_threshold=0.85)
 
 # Iterative
-config = OptimizerConfig(
-    strategy="iterative",
-    max_iterations=10,
-    score_threshold=0.85,
-    reasoning_model="claude-sonnet-4-20250514",
-    eval_temperature=0.0,
-)
+config = OptimizerConfig(strategy="iterative", max_iterations=10, score_threshold=0.85)
 
-# PDO — pass strategy-specific params via extra_kwargs
+# PDO — strategy-specific params via extra_kwargs
 config = OptimizerConfig(
     strategy="pdo",
-    max_iterations=50,        # total rounds
-    score_threshold=0.90,
+    max_iterations=50,
     extra_kwargs={
         "duels_per_round": 3,
         "samples_per_duel": 10,
@@ -619,75 +397,21 @@ config = OptimizerConfig(
         "ranking_method": "auto",
     },
 )
+
 # Few-shot
 config = OptimizerConfig(
     strategy="fewshot",
     max_iterations=8,
-    score_threshold=0.85,
-    extra_kwargs={
-        "max_examples": 5,           # examples to include in prompt
-        "candidate_pool_size": 20,    # exemplars to bootstrap
-        "bootstrap_rounds": 3,       # re-bootstrap every N iterations
-        "selection_strategy": "diverse",
-    },
+    extra_kwargs={"max_examples": 5, "candidate_pool_size": 20},
 )
 
 # Structural
 config = OptimizerConfig(
     strategy="structural",
     max_iterations=6,
-    score_threshold=0.85,
-    extra_kwargs={
-        "variants_per_round": 4,     # structural variants to try per iteration
-    },
+    extra_kwargs={"variants_per_round": 4},
 )
 ```
-
-## Label-free evaluation
-
-Reflex works with datasets that have no reference answers — for example,
-open-ended creative tasks, summarization, or chat responses. When there is no
-ideal answer to compare against, use an LLM judge instead of ROUGE/BLEU/exact
-match.
-
-**CLI**:
-
-```bash
-# Label-free dataset — must supply --judge
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  --judge openai/gpt-4o \
-  -o best_prompt.md
-```
-
-If the dataset has no ideal answers and no `--judge` is supplied, reflex
-exits early with an error explaining what to do.
-
-**Python API**:
-
-```python
-from aevyra_verdict import Dataset, LLMJudge
-from aevyra_reflex import PromptOptimizer, OptimizerConfig
-
-dataset = Dataset.from_jsonl("dataset.jsonl")   # no ideal answers
-
-result = (
-    PromptOptimizer(OptimizerConfig(strategy="auto"))
-    .set_dataset(dataset)
-    .add_provider("openai", "gpt-4o-mini")
-    .add_metric(LLMJudge(judge_provider="openai", judge_model="gpt-4o"))
-    .run("You are a helpful assistant.")
-)
-```
-
-**Notes**:
-- `fewshot` strategy requires labeled examples to build demonstrations, so the
-  `auto` strategy automatically excludes it for label-free datasets. All other
-  strategies (iterative, structural, pdo) work without labels.
-- PDO's pairwise judge adapts its evaluation criteria based on whether a
-  reference answer is present: when there is no ideal, it evaluates on quality,
-  instruction-following, and conciseness rather than correctness against a
-  reference.
 
 ## Status
 

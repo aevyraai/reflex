@@ -1,6 +1,6 @@
 ---
 title: Quick start
-description: Optimize your first prompt in under 5 minutes.
+description: Optimize your first prompt in under 5 minutes. One install, one command.
 ---
 
 ## Install
@@ -9,21 +9,28 @@ description: Optimize your first prompt in under 5 minutes.
 pip install aevyra-reflex
 ```
 
-This also installs [aevyra-verdict](https://github.com/aevyraai/verdict) for
-evaluation.
+That's the entire setup. No YAML config, no framework to configure, no
+separate server. This also installs
+[aevyra-verdict](https://github.com/aevyraai/verdict) for evaluation.
 
 ## Set your API keys
 
 By default, reflex uses Claude for reasoning (analyzing failures, rewriting
-prompts). You also need a key for whatever model you're optimizing:
+prompts). You also need a key for whatever model you're evaluating:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...    # default reasoning model (or use --reasoning-model for local)
+export ANTHROPIC_API_KEY=sk-ant-...    # default reasoning model
 export OPENAI_API_KEY=sk-...           # if optimizing an OpenAI model
 ```
 
-For local models (Ollama), no extra key is needed. You can also use a local
-reasoning model — see [Choosing a reasoning model](/docs/configuration#choosing-a-reasoning-model).
+For local models (Ollama), no extra key is needed — and you can use a local
+reasoning model too so nothing leaves your machine:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model ollama/qwen3:8b
+```
 
 ## Prepare a dataset
 
@@ -34,11 +41,14 @@ Use the same JSONL format as verdict — each line has messages and an ideal ans
 {"messages": [{"role": "user", "content": "Explain binary search in one sentence."}], "ideal": "Binary search repeatedly halves a sorted array to find a target value in O(log n) time."}
 ```
 
+No ideal answers? Use a label-free dataset with an LLM judge — see
+[Label-free evaluation](/docs/configuration#label-free-evaluation).
+
 ## Write a starting prompt
 
 Create a plain text file with your system prompt:
 
-```markdown
+```
 You are a helpful assistant. Answer questions concisely.
 ```
 
@@ -52,8 +62,8 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
   -o best_prompt.md
 ```
 
-You'll see a baseline eval, optimization iterations with rising scores, and a
-final verification:
+You'll see a baseline eval, iterations with rising scores, and a final
+verification:
 
 ```
 ====================================================
@@ -89,23 +99,27 @@ Step 3/3  Verifying...
 Best prompt saved to: best_prompt.md
 ```
 
+## Explore the run in the dashboard
+
+Once you have a run, open the dashboard to see score trajectory, prompt diffs
+between iterations, and the reasoning model's analysis:
+
+```bash
+aevyra-reflex dashboard
+```
+
+Opens `http://localhost:8128`. No separate server, no build step. Click into
+any run to see what changed each iteration and why.
+
 ## Use the Python API
 
 ```python
 from aevyra_verdict import Dataset, RougeScore
 from aevyra_reflex import PromptOptimizer, OptimizerConfig
 
-dataset = Dataset.from_jsonl("dataset.jsonl")
-
-config = OptimizerConfig(
-    strategy="auto",
-    max_iterations=10,
-    score_threshold=0.85,
-)
-
 result = (
-    PromptOptimizer(config)
-    .set_dataset(dataset)
+    PromptOptimizer(OptimizerConfig(strategy="auto", max_iterations=10))
+    .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
     .add_provider("local", "llama3.1")
     .add_metric(RougeScore())
     .run("You are a helpful assistant.")
@@ -117,11 +131,10 @@ result.save_best_prompt("best_prompt.md")
 
 ## Set a real target (verdict → reflex)
 
-Instead of an arbitrary threshold, set the target from a real benchmark. If you
-already ran `aevyra-verdict`, pass the results file:
+Instead of an arbitrary threshold, set the target from a real benchmark. If
+you already ran `aevyra-verdict`, pass the results file:
 
 ```bash
-# Use gpt-4o-mini's score as the target for llama
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 \
   --verdict-results results.json \
@@ -131,7 +144,6 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 Or let reflex benchmark for you in one command:
 
 ```bash
-# Benchmark llama vs gpt-4o-mini, then optimize llama to match
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 \
   --target openai/gpt-4o-mini \
@@ -156,16 +168,16 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 ## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Dashboard" icon="chart-line" href="/docs/dashboard">
+    Score charts, prompt diffs, branch runs
+  </Card>
   <Card title="Strategies" icon="chess" href="/docs/strategies">
-    Understand auto, iterative, structural, PDO, and fewshot
+    Auto, iterative, structural, PDO, fewshot
   </Card>
   <Card title="Configuration" icon="gear" href="/docs/configuration">
-    Tune iterations, thresholds, parallelism, and strategy params
+    Iterations, thresholds, parallelism, strategy params
   </Card>
   <Card title="CLI reference" icon="terminal" href="/docs/cli">
     All flags and options
-  </Card>
-  <Card title="Analysis output" icon="chart-line" href="/docs/analysis">
-    Understand the optimization report
   </Card>
 </CardGroup>

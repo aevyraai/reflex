@@ -1,12 +1,66 @@
 ---
 title: Introduction
-description: Agentic prompt optimization — an AI agent that diagnoses eval failures and rewrites prompts until your model hits the target score.
+description: Lightweight agentic prompt optimization — one install, one command, no config files.
 ---
 
-aevyra-reflex is an agentic prompt optimizer. Give it a dataset, a system prompt,
-and a target score — it diagnoses why your model is underperforming, reasons about
-the failure patterns, and rewrites the prompt until the scores match your target.
+aevyra-reflex is a lightweight prompt optimizer. Give it a dataset, a system
+prompt, and a target score — it diagnoses why your model is underperforming,
+reasons about the failure patterns, and rewrites the prompt until scores match
+your target.
+
+**No YAML. No framework dependencies. No separate server to deploy.** Just
+`pip install aevyra-reflex` and a single command.
+
+```bash
+pip install aevyra-reflex
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
+```
+
 All evaluation runs through [aevyra-verdict](https://github.com/aevyraai/verdict).
+
+## Dashboard
+
+Every run is immediately explorable in the built-in dashboard:
+
+```bash
+aevyra-reflex dashboard
+```
+
+No separate server, no build step — opens `http://localhost:8128` with score
+trajectory charts, prompt diffs, reasoning analysis, and token usage. Branch
+from any iteration to continue with a different strategy.
+
+<CardGroup cols={2}>
+  <Card title="Open the dashboard" icon="chart-line" href="/docs/dashboard">
+    Score charts, prompt diffs, reasoning traces, and branch runs
+  </Card>
+  <Card title="Quick start" icon="bolt" href="/docs/quickstart">
+    Optimize your first prompt in under 5 minutes
+  </Card>
+</CardGroup>
+
+## Why reflex
+
+**Lightweight.** No heavy framework dependencies. Just Python, standard
+library, and `numpy` for PDO math. Installs in seconds and has no opinion
+about the rest of your stack.
+
+**Zero config.** No YAML files, no project setup, no adapter classes to write.
+Point it at a JSONL file and a prompt file and it runs.
+
+**Fully local.** Ollama is a first-class citizen. Use a local reasoning model
+so nothing leaves your machine:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model ollama/qwen3:8b
+```
+
+**Agentic, not scripted.** Each iteration the reasoning model explains *why* it
+made a change — you learn from the run, not just get an output. The causal
+rewrite log tracks what helped, what had no effect, and what hurt, so the model
+avoids repeating dead ends.
 
 ## What it does
 
@@ -35,13 +89,13 @@ You can also run any strategy directly.
     Multi-phase pipeline — structural → iterative → fewshot, chosen adaptively
   </Card>
   <Card title="Iterative" icon="arrows-spin" href="/docs/strategies#iterative">
-    Diagnose failures, revise wording, repeat
+    Diagnose failures, revise wording, repeat. Label-free aware.
   </Card>
   <Card title="Structural" icon="table-columns" href="/docs/strategies#structural">
     Reorganize formatting, sections, and hierarchy
   </Card>
   <Card title="PDO" icon="trophy" href="/docs/strategies#pdo">
-    Tournament-style search with dueling bandits
+    Tournament-style search with dueling bandits and adaptive ranking
   </Card>
 </CardGroup>
 
@@ -77,9 +131,6 @@ You can also run any strategy directly.
 ```
 
 <CardGroup cols={2}>
-  <Card title="Quick start" icon="bolt" href="/docs/quickstart">
-    Optimize your first prompt in under 5 minutes
-  </Card>
   <Card title="CLI reference" icon="terminal" href="/docs/cli">
     All commands and flags
   </Card>
@@ -88,5 +139,8 @@ You can also run any strategy directly.
   </Card>
   <Card title="Configuration" icon="gear" href="/docs/configuration">
     Tuning iterations, thresholds, and parallelism
+  </Card>
+  <Card title="Providers" icon="server" href="/docs/providers">
+    OpenAI, Anthropic, Gemini, Ollama, and more
   </Card>
 </CardGroup>
