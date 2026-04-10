@@ -80,9 +80,9 @@ config = OptimizerConfig(
     strategy="auto",                   # auto, iterative, structural, pdo, fewshot
     max_iterations=10,                 # total iteration budget
     score_threshold=0.85,              # stop when score reaches this
-    train_ratio=0.8,                   # 80% train / 20% held-out test
-    val_ratio=0.0,                     # fraction reserved for validation (0 = disabled)
-    early_stopping_patience=0,         # stop when val score stagnates for N iters (0 = disabled)
+    train_ratio=0.8,                   # 70% train / 10% val / 20% test (default)
+    val_ratio=0.1,                     # fraction reserved for validation (0 = disabled)
+    early_stopping_patience=3,         # stop when val score stagnates for N iters (0 = disabled)
     batch_size=0,                      # 0 = full training set; >0 = examples per iteration
     batch_seed=42,                     # base seed for mini-batch sampling
     full_eval_steps=0,                 # full-set checkpoint every N iters (0 = disabled)
@@ -100,8 +100,8 @@ config = OptimizerConfig(
 | `max_iterations` | `10` | Maximum iterations (total budget for auto across all phases) |
 | `score_threshold` | `0.85` | Target score — optimization stops when reached. Set automatically by `--target` or `--verdict-results` |
 | `train_ratio` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
-| `val_ratio` | `0.0` | Fraction of total examples reserved as a validation set, carved from the training portion. Used to detect overfitting mid-run. Set to `0.0` to disable |
-| `early_stopping_patience` | `0` | Stop optimization early if val score has not improved for this many consecutive iterations. Only active when `val_ratio > 0`. Set to `0` to disable |
+| `val_ratio` | `0.1` | Fraction of total examples reserved as a validation set, carved from the training portion. Used to detect overfitting mid-run. Set to `0.0` to disable |
+| `early_stopping_patience` | `3` | Stop optimization early if val score has not improved for this many consecutive iterations. Only active when `val_ratio > 0`. Set to `0` to disable |
 | `batch_size` | `0` | Mini-batch size per iteration. `0` = full training set. When > 0, each iteration samples this many examples at random from the training data |
 | `batch_seed` | `42` | Base seed for mini-batch sampling. Iteration `i` uses `batch_seed + i` so every batch is different but the run is reproducible |
 | `full_eval_steps` | `0` | When using mini-batch mode, run a full training-set eval every this many iterations. `0` = never (use mini-batch scores throughout). E.g. `5` runs a full eval on iterations 5, 10, 15, … Full-eval iterations are marked in the dashboard |
@@ -164,18 +164,18 @@ specifically rather than generalizing. Early stopping on val plateau saves
 you compute and returns the least-overfit prompt.
 
 ```bash
-# 70% train / 10% val / 20% test  (val carved from train portion)
-aevyra-reflex optimize data.jsonl prompt.md \
-  -m local/llama3.1 \
-  --train-split 0.8 \
-  --val-split 0.1
+# Default: 70% train / 10% val / 20% test, early stopping patience=3
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1
 
-# Same split, stop early when val stagnates for 3 consecutive iterations
+# Disable val split
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --val-split 0.0
+
+# Custom patience
 aevyra-reflex optimize data.jsonl prompt.md \
   -m local/llama3.1 \
   --train-split 0.8 \
   --val-split 0.1 \
-  --early-stopping-patience 3
+  --early-stopping-patience 5
 ```
 
 Python API:
