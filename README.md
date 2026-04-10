@@ -40,9 +40,9 @@ aevyra-reflex dashboard --port 9000 --run-dir ./experiments/.reflex
 **No config files.** No YAML. No framework to learn. Point it at a dataset and
 a prompt file and it runs.
 
-**Lightweight.** No DSPy. No LiteLLM. No heavy ML framework dependencies. Just
-Python, standard library, and `numpy` for PDO math. The optimizer installs in
-seconds and has no opinion about the rest of your stack.
+**Lightweight.** No heavy framework dependencies. Just Python, standard
+library, and `numpy` for PDO math. The optimizer installs in seconds and has
+no opinion about the rest of your stack.
 
 **Runs 100% locally.** Ollama is a first-class citizen. Use a local reasoning
 model so nothing leaves your machine:
@@ -146,12 +146,10 @@ Reflex is an agent, not a script. It draws from four optimization axes:
   wording. Label-free aware: shifts automatically from reference comparison to
   quality/instruction-following analysis when the dataset has no ideal answers.
 - **pdo** — tournament-style search over prompt variants using dueling bandits
-  with Thompson sampling and adaptive multi-ranker fusion. Based on Meta's PDO
-  paper ([arXiv:2510.13907](https://arxiv.org/abs/2510.13907)).
+  with Thompson sampling and adaptive multi-ranker fusion.
 - **structural** — reorganize the prompt's layout, formatting, and information
-  hierarchy. Inspired by Microsoft's SAMMO.
+  hierarchy.
 - **fewshot** — curate the most informative few-shot examples from the dataset.
-  Inspired by Stanford's DSPy.
 
 Each axis can be used standalone with `-s iterative`, `-s pdo`, etc.
 
