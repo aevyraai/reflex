@@ -170,7 +170,7 @@ class PDOStrategy(Strategy):
                     if champ is None or champ >= len(pool):
                         continue
                     wins = sum(1 for w, _ in round_outcomes if w == champ)
-                    losses = sum(1 for _, l in round_outcomes if l == champ)
+                    losses = sum(1 for _, loser in round_outcomes if loser == champ)
                     if wins + losses > 0 and wins >= losses:
                         method_alphas[k] += 1.0
 
