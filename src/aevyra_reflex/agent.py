@@ -316,23 +316,30 @@ class LLM:
         self,
         system_prompt: str,
         failing_samples: list[dict[str, Any]],
+        *,
+        label_free: bool = False,
     ) -> tuple[str, str, str]:
         """Analyze failures and propose a revised system prompt.
 
         Args:
             system_prompt: The current system prompt.
             failing_samples: List of dicts with keys: input, response, ideal, score.
+            label_free: If True, injects a context block telling the reasoning model
+                that scores come from an LLM judge (not reference comparison) and to
+                focus on quality/instruction-following failures rather than correctness.
 
         Returns:
             (revised_prompt, reasoning, change_summary) — the new prompt, the
             agent's full analysis, and a one-liner summarising what changed.
         """
-        from aevyra_reflex.prompts import DIAGNOSE_FAILURES_PROMPT
+        from aevyra_reflex.prompts import DIAGNOSE_FAILURES_PROMPT, LABEL_FREE_EVAL_CONTEXT
 
         samples_text = _format_failing_samples(failing_samples)
+        eval_context = LABEL_FREE_EVAL_CONTEXT if label_free else ""
         prompt = DIAGNOSE_FAILURES_PROMPT.format(
             system_prompt=system_prompt,
             failing_samples=samples_text,
+            eval_context=eval_context,
         )
         response = self.generate(prompt, temperature=0.7)
         return (
@@ -351,22 +358,28 @@ class LLM:
         failing_samples: list[dict[str, Any]],
         previous_reasoning: str,
         rewrite_log: list[dict[str, Any]] | None = None,
+        *,
+        label_free: bool = False,
     ) -> tuple[str, str, str]:
         """Refine a prompt based on ongoing iteration results.
 
         Args:
             rewrite_log: List of dicts with keys: iteration, score, delta,
                 change_summary — the causal history of what was tried and what worked.
+            label_free: If True, injects a context block telling the reasoning model
+                that scores come from an LLM judge (not reference comparison) and to
+                focus on quality/instruction-following failures rather than correctness.
 
         Returns:
             (revised_prompt, reasoning, change_summary)
         """
-        from aevyra_reflex.prompts import REFINE_PROMPT
+        from aevyra_reflex.prompts import REFINE_PROMPT, LABEL_FREE_EVAL_CONTEXT
 
         improved = len(score_trajectory) >= 2 and score_trajectory[-1] > score_trajectory[-2]
         trajectory_str = " → ".join(f"{s:.3f}" for s in score_trajectory)
         samples_text = _format_failing_samples(failing_samples)
         history_text = _format_rewrite_log(rewrite_log or [])
+        eval_context = LABEL_FREE_EVAL_CONTEXT if label_free else ""
 
         prompt = REFINE_PROMPT.format(
             system_prompt=system_prompt,
@@ -378,6 +391,7 @@ class LLM:
             failing_samples=samples_text,
             previous_reasoning=previous_reasoning,
             improved_text="improved" if improved else "not improved",
+            eval_context=eval_context,
         )
         response = self.generate(prompt, temperature=0.7)
         return (
