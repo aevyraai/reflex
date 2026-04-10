@@ -54,7 +54,22 @@ aevyra-reflex run \
 
 ### Using a different reasoning provider
 
-You can swap Claude for any OpenAI-compatible model or Ollama:
+You can swap Claude for Gemini, any OpenAI-compatible model, or a local Ollama model.
+
+**Gemini** (no extra package — uses Google's OpenAI-compatible endpoint):
+
+```bash
+export GOOGLE_API_KEY=...
+```
+
+```python
+config = OptimizerConfig(
+    reasoning_model="gemini-2.0-flash",
+    reasoning_provider="gemini",  # or omit — inferred from "gemini-*" model name
+)
+```
+
+**OpenAI:**
 
 ```bash
 pip install aevyra-reflex[openai]
@@ -67,7 +82,7 @@ config = OptimizerConfig(
 )
 ```
 
-For Ollama (no SDK needed — uses `urllib` directly):
+**Ollama** (no SDK needed — uses `urllib` directly):
 
 ```python
 config = OptimizerConfig(

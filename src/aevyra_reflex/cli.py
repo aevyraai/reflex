@@ -78,7 +78,7 @@ def optimize(
     ] = "auto",
     reasoning_model: Annotated[
         Optional[str],
-        typer.Option("--reasoning-model", help="LLM for reasoning in 'provider/model' format. Defaults to Claude Sonnet. Use 'ollama/llama3.1:70b' for local."),
+        typer.Option("--reasoning-model", help="LLM for reasoning in 'provider/model' format. Defaults to Claude Sonnet. Examples: 'gemini/gemini-2.0-flash', 'openai/gpt-4o', 'ollama/llama3.1:70b'."),
     ] = None,
     reasoning_api_key: Annotated[
         Optional[str],
