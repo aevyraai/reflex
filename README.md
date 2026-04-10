@@ -2,17 +2,18 @@
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
 
-Prompt optimization that fits in your workflow. One `pip install`, one command,
-no YAML files, no framework dependencies — just a better prompt.
+Agentic prompt optimization. Reflex reads your eval results, diagnoses why
+your model is underperforming, and rewrites the prompt until the scores match
+your target — no manual prompt engineering required. Point it at a dataset, a
+model, and a target score. Reflex figures out the rest.
 
 ```bash
 pip install aevyra-reflex
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
 ```
 
-Reflex reads your eval results, diagnoses why your model is underperforming,
-and rewrites the prompt until the scores match your target. Works with any
-model — local Ollama, OpenAI, Anthropic, Gemini, or any OpenAI-compatible endpoint.
+Works with any model — local Ollama or vLLM, OpenAI, Anthropic, Gemini, or
+any OpenAI-compatible endpoint.
 
 ## Dashboard
 
@@ -26,6 +27,10 @@ aevyra-reflex dashboard
 Opens `http://localhost:8128` with score trajectory charts, prompt diffs
 between iterations, reasoning analysis, token usage, and config snapshots.
 Click into any run to see exactly what the reasoning model changed and why.
+
+![Optimization runs list](docs/images/dashboard-runs-list.jpg)
+
+![Run detail view](docs/images/dashboard-run-detail.jpg)
 
 **Branch runs** let you pick any iteration from a completed or interrupted run
 and continue optimizing from that point with a different strategy — no
@@ -44,8 +49,8 @@ a prompt file and it runs.
 library, and `numpy` for PDO math. The optimizer installs in seconds and has
 no opinion about the rest of your stack.
 
-**Runs 100% locally.** Ollama is a first-class citizen. Use a local reasoning
-model so nothing leaves your machine:
+**Works locally.** Ollama and vLLM are supported — run everything on your own
+hardware if you want:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
@@ -319,7 +324,13 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 --reasoning-model gemini/gemini-2.5-pro
 
-# Any OpenAI-compatible endpoint (vLLM, TGI, LM Studio, etc.)
+# vLLM — self-hosted reasoning model
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model openai/qwen3-8b \
+  --reasoning-base-url http://localhost:8000/v1
+
+# Any other OpenAI-compatible endpoint (TGI, LM Studio, etc.)
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 \
   --reasoning-model openai/my-model \
