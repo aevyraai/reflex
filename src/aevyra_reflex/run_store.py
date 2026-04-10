@@ -241,8 +241,17 @@ class RunStore:
                     config_file = d / "config.json"
                     if config_file.exists():
                         config = _read_json(config_file)
-                        if dataset_path and config.get("dataset_path") != str(dataset_path):
-                            continue
+                        if dataset_path:
+                            stored = config.get("dataset_path", "")
+                            # Normalise both to absolute paths before comparing
+                            # so relative CLI args match absolute stored paths.
+                            try:
+                                stored_abs = str(Path(stored).resolve()) if stored else ""
+                                given_abs = str(Path(dataset_path).resolve())
+                            except Exception:
+                                stored_abs, given_abs = stored, str(dataset_path)
+                            if stored_abs != given_abs:
+                                continue
                         if model:
                             opt_config = config.get("optimizer_config", {})
                             # Check if any of the CLI models match
