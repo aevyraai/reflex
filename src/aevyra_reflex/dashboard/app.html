@@ -1378,6 +1378,25 @@ function renderNewRun() {
   );
   const itersInput = el('input', { class: 'form-input', type: 'number', value: '10', min: '3', max: '50' });
 
+  // PDO-specific: ranking method (shown only when strategy = pdo)
+  const rankingMethodSel = el('select', { class: 'form-select' },
+    el('option', { value: 'auto' }, 'Auto (adaptive — recommended)'),
+    el('option', { value: 'fused' }, 'Fused (equal-weight blend)'),
+    el('option', { value: 'copeland' }, 'Copeland'),
+    el('option', { value: 'borda' }, 'Borda'),
+    el('option', { value: 'elo' }, 'Elo'),
+    el('option', { value: 'avg_winrate' }, 'Avg win rate')
+  );
+  const rankingMethodGroup = el('div', { class: 'form-group', style: { marginBottom: '0', display: 'none' } },
+    el('label', { class: 'form-label' }, 'Ranking Method',
+      el('span', null, 'how PDO picks the champion each round')
+    ),
+    rankingMethodSel
+  );
+  strategySel.addEventListener('change', () => {
+    rankingMethodGroup.style.display = strategySel.value === 'pdo' ? '' : 'none';
+  });
+
   // ── Threshold toggle ──────────────────────────────────────
   let threshMode = 'auto'; // 'manual' | 'verdict' | 'auto'
 
@@ -1456,6 +1475,7 @@ function renderNewRun() {
         itersInput
       )
     ),
+    el('div', { style: { marginTop: '12px' } }, rankingMethodGroup),
     el('div', { class: 'form-group', style: { marginTop: '16px' } },
       el('label', { class: 'form-label' }, 'Source Model', el('span', null, 'optional — for migration mode')),
       el('input', { class: 'form-input', type: 'text', placeholder: 'e.g. claude-sonnet, gpt-4o, llama3', id: 'source-model-input',
@@ -1603,6 +1623,7 @@ function renderNewRun() {
           ? judgeDimsInput.value.split(',').map(s => s.trim()).filter(Boolean)
           : [],
         strategy: strategySel.value,
+        ranking_method: strategySel.value === 'pdo' ? rankingMethodSel.value : 'auto',
         max_iterations: parseInt(itersInput.value, 10) || 10,
         score_threshold: threshMode === 'manual' ? (parseFloat(threshManualInput.value) || 0.85) : 0.85,
         verdict_results_path: threshMode === 'verdict' ? threshVerdictInput.value.trim() : '',

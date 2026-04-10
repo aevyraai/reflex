@@ -118,6 +118,13 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
         full_eval_steps = int(config_dict.get("full_eval_steps", 0))
         eval_runs = int(config_dict.get("eval_runs", 1))
 
+        # Strategy-specific extra_kwargs
+        extra_kwargs: dict[str, Any] = {}
+        if strategy == "pdo":
+            ranking_method = config_dict.get("ranking_method", "auto")
+            if ranking_method:
+                extra_kwargs["ranking_method"] = ranking_method
+
         config = OptimizerConfig(
             strategy=strategy,
             max_iterations=max_iterations,
@@ -133,6 +140,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             batch_size=batch_size,
             full_eval_steps=full_eval_steps,
             eval_runs=eval_runs,
+            extra_kwargs=extra_kwargs,
         )
 
         # ── Load dataset ──────────────────────────────────────────────────
