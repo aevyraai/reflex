@@ -108,7 +108,7 @@ config = OptimizerConfig(
 | `max_workers` | `4` | Thread pool size for parallel evaluation |
 | `eval_runs` | `1` | Number of eval passes to run and average for the baseline and final verification. Use 3–5 for noisy tasks or small datasets. Does not affect optimization iterations |
 | `reasoning_model` | `"claude-sonnet-4-20250514"` | LLM used for reasoning (failure analysis, prompt rewriting) |
-| `reasoning_provider` | `None` | Provider for the reasoning model: `"anthropic"`, `"openai"`, `"ollama"`, or an alias. Auto-detected from model name if `None` |
+| `reasoning_provider` | `None` | Provider for the reasoning model: `"anthropic"`, `"openai"`, `"ollama"`, `"gemini"`, or any alias (`"openrouter"`, `"groq"`, etc.). Auto-detected from model name if `None` |
 | `reasoning_api_key` | `None` | API key for the reasoning model. Falls back to the provider's default env var |
 | `reasoning_base_url` | `None` | Base URL for self-hosted or OpenAI-compatible reasoning model endpoints |
 | `eval_temperature` | `0.0` | Temperature for target model completions |
@@ -352,6 +352,10 @@ Pass strategy-specific parameters via `extra_kwargs`:
             "mutation_frequency": 5,
             "num_top_to_mutate": 2,
             "max_pool_size": 20,
+            # "auto" (default) learns which ranking method works best for
+            # this dataset over time via adaptive Dirichlet fusion.
+            # Other options: "fused", "copeland", "borda", "elo", "avg_winrate"
+            "ranking_method": "auto",
         },
     )
     ```
@@ -365,6 +369,7 @@ Pass strategy-specific parameters via `extra_kwargs`:
     | `mutation_frequency` | `5` | Mutate top prompts every N rounds |
     | `num_top_to_mutate` | `2` | How many top prompts to mutate |
     | `max_pool_size` | `20` | Maximum pool size before pruning |
+    | `ranking_method` | `"auto"` | How to rank the prompt pool each round. `"auto"` adaptively learns the best method; `"fused"` uses equal-weight fusion; `"copeland"`, `"borda"`, `"elo"`, `"avg_winrate"` use a single method explicitly |
   </Tab>
   <Tab title="Few-shot">
     ```python
@@ -492,6 +497,25 @@ A more capable reasoning model produces better prompt rewrites.
     )
     ```
   </Tab>
+  <Tab title="Gemini">
+    ```bash
+    aevyra-reflex optimize dataset.jsonl prompt.md \
+      -m local/llama3.1 \
+      --reasoning-model gemini/gemini-2.0-flash
+    ```
+
+    Requires `GOOGLE_API_KEY`. Routes through Google's OpenAI-compatible
+    v1beta endpoint — no extra package needed beyond the default install.
+    `gemini-2.5-pro` is the strongest option for complex diagnostic reasoning.
+
+    Python API:
+    ```python
+    config = OptimizerConfig(
+        reasoning_model="gemini-2.0-flash",
+        reasoning_provider="gemini",  # or omit — inferred from model name
+    )
+    ```
+  </Tab>
   <Tab title="OpenRouter / Together / etc.">
     ```bash
     aevyra-reflex optimize dataset.jsonl prompt.md \
@@ -499,9 +523,10 @@ A more capable reasoning model produces better prompt rewrites.
       --reasoning-model openrouter/meta-llama/llama-3.1-70b-instruct
     ```
 
-    Provider aliases (`openrouter`, `together`, `groq`, etc.) work the same
-    way as for `--target` and `-m`. The API key is read from the provider's
-    env var (e.g. `OPENROUTER_API_KEY`), or you can pass `--reasoning-api-key`.
+    Provider aliases (`openrouter`, `together`, `groq`, `gemini`, etc.) work
+    the same way as for `--target` and `-m`. The API key is read from the
+    provider's env var (e.g. `OPENROUTER_API_KEY`), or you can pass
+    `--reasoning-api-key`.
   </Tab>
   <Tab title="Self-hosted endpoint">
     ```bash

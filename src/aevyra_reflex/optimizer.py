@@ -141,6 +141,10 @@ PROVIDER_ALIASES: dict[str, dict[str, str]] = {
         "base_url": "https://api.perplexity.ai",
         "env_key": "PERPLEXITY_API_KEY",
     },
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "env_key": "GOOGLE_API_KEY",
+    },
 }
 
 

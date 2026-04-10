@@ -91,6 +91,15 @@ class PDOStrategy(Strategy):
         best_idx = 0
         best_score = 0.0
 
+        # Adaptive ranking state — one Beta alpha per method.
+        # method_alphas[k] starts at 1 (uniform Dirichlet prior) and grows
+        # each time method k's predicted champion wins its next-round duels.
+        ranking_method = pdo_config.ranking_method
+        method_alphas = np.ones(len(RANKING_METHODS))
+        # Per-method champion predicted at the END of each round, used to
+        # score method accuracy after the NEXT round's duels.
+        prev_method_champions: dict[str, int] = {}
+
         for round_num in range(1, pdo_config.total_rounds + 1):
             logger.info(f"Round {round_num}/{pdo_config.total_rounds} (pool size: {len(pool)})")
 
@@ -130,13 +139,19 @@ class PDOStrategy(Strategy):
             )
             t0 = time.time()
 
+            # Collect (winner_idx, loser_idx) for this round — used to score
+            # each method's previous-round champion prediction.
+            round_outcomes: list[tuple[int, int]] = []  # (winner, loser)
+
             with ThreadPoolExecutor(max_workers=max_duel_workers) as duel_pool:
                 for i, j, winner in duel_pool.map(_run_one_duel, duel_pairs):
                     if winner == "A":
                         W[i, j] += 1
+                        round_outcomes.append((i, j))
                         logger.info(f"    Duel: prompt {i} beat prompt {j}")
                     else:
                         W[j, i] += 1
+                        round_outcomes.append((j, i))
                         logger.info(f"    Duel: prompt {j} beat prompt {i}")
 
             duel_elapsed = time.time() - t0
@@ -145,16 +160,50 @@ class PDOStrategy(Strategy):
                 f"({duel_elapsed / len(duel_pairs):.1f}s/duel)"
             )
 
-            # Compute rankings
-            rankings = _copeland_ranking(W)
+            # --- Adaptive ranking: update method_alphas ---
+            # For each method, check if its champion from the previous round
+            # won more duels than it lost in this round.  A win increments the
+            # method's alpha (shifting Dirichlet weight toward it).
+            if ranking_method == "auto" and prev_method_champions:
+                for k, method in enumerate(RANKING_METHODS):
+                    champ = prev_method_champions.get(method)
+                    if champ is None or champ >= len(pool):
+                        continue
+                    wins = sum(1 for w, _ in round_outcomes if w == champ)
+                    losses = sum(1 for _, loser in round_outcomes if loser == champ)
+                    if wins + losses > 0 and wins >= losses:
+                        method_alphas[k] += 1.0
+
+                # Log dominant method (highest alpha weight)
+                dominant_idx = int(np.argmax(method_alphas))
+                total_alpha = method_alphas.sum()
+                weights_pct = [f"{m}={method_alphas[k]/total_alpha:.0%}"
+                               for k, m in enumerate(RANKING_METHODS)]
+                logger.info(
+                    f"  Ranking weights: {', '.join(weights_pct)} "
+                    f"(dominant: {RANKING_METHODS[dominant_idx]})"
+                )
+
+            # Compute rankings with the chosen method
+            rankings = _rank(W, ranking_method, method_alphas)
             current_best_idx = rankings[0]
+
+            # Store each method's champion prediction for the next round
+            if ranking_method == "auto":
+                prev_method_champions = {
+                    m: int(np.argmax(_scores_for_method(W, m)))
+                    for m in RANKING_METHODS
+                }
 
             # Record iteration
             record = IterationRecord(
                 iteration=round_num,
                 system_prompt=pool[current_best_idx],
                 score=_win_rate(W, current_best_idx),
-                reasoning=f"Pool size: {len(pool)}, champion index: {current_best_idx}",
+                reasoning=(
+                    f"Pool size: {len(pool)}, champion index: {current_best_idx}, "
+                    f"ranking: {ranking_method}"
+                ),
             )
             iterations.append(record)
             if on_iteration:
@@ -200,14 +249,14 @@ class PDOStrategy(Strategy):
                     pool, W, rankings,
                     keep=pdo_config.max_pool_size,
                 )
-                # Remap best_idx
+                # Remap best_idx after pruning
                 if best_idx >= len(pool):
                     best_idx = 0
                     best_score = _win_rate(W, 0)
                 logger.info(f"  Pruned → pool size: {len(pool)}")
 
         # Final: return the best prompt found
-        final_rankings = _copeland_ranking(W)
+        final_rankings = _rank(W, ranking_method, method_alphas)
         final_best = final_rankings[0]
 
         return OptimizationResult(
@@ -235,6 +284,7 @@ class _PDOConfig:
         mutation_frequency: int = 5,
         num_top_to_mutate: int = 2,
         max_pool_size: int = 20,
+        ranking_method: str = "auto",
     ):
         self.total_rounds = total_rounds
         self.duels_per_round = duels_per_round
@@ -244,6 +294,7 @@ class _PDOConfig:
         self.mutation_frequency = mutation_frequency
         self.num_top_to_mutate = num_top_to_mutate
         self.max_pool_size = max_pool_size
+        self.ranking_method = ranking_method
 
     @classmethod
     def from_optimizer_config(cls, config: Any) -> _PDOConfig:
@@ -257,6 +308,7 @@ class _PDOConfig:
             mutation_frequency=kw.get("mutation_frequency", 5),
             num_top_to_mutate=kw.get("num_top_to_mutate", 2),
             max_pool_size=kw.get("max_pool_size", 20),
+            ranking_method=kw.get("ranking_method", "auto"),
         )
 
 
@@ -464,13 +516,24 @@ def _run_duel(
     return "A" if wins_a >= wins_b else "B"
 
 
-def _copeland_ranking(W: np.ndarray) -> list[int]:
-    """Rank prompts by Copeland score (wins - losses) with win-rate tiebreaker."""
+# ---------------------------------------------------------------------------
+# Ranking methods
+# ---------------------------------------------------------------------------
+
+#: All individual ranking methods available for PDO.
+#: Order matters — indices are used in method_alphas for the adaptive fusion.
+RANKING_METHODS = ("copeland", "borda", "elo", "avg_winrate")
+
+
+def _copeland_scores(W: np.ndarray) -> np.ndarray:
+    """Copeland score = (opponents beaten) - (opponents lost to).
+
+    Win-rate against each opponent is used as a fractional tiebreaker, added
+    at a tiny scale so it only affects tied Copeland scores.
+    """
     K = W.shape[0]
     N = W + W.T
     scores = np.zeros(K)
-    winrates = np.zeros(K)
-
     for i in range(K):
         wins = losses = 0
         wr_sum = 0.0
@@ -485,18 +548,151 @@ def _copeland_ranking(W: np.ndarray) -> list[int]:
                     losses += 1
                 wr_sum += W[i, j] / N[i, j]
                 count += 1
-        scores[i] = wins - losses
-        winrates[i] = wr_sum / count if count > 0 else 0.0
+        wr = wr_sum / count if count > 0 else 0.0
+        scores[i] = (wins - losses) + wr * 0.01  # tiebreak
+    return scores
 
-    # Sort descending by Copeland score, then by win rate
-    order = np.lexsort((-winrates, -scores))
-    return order.tolist()
+
+def _borda_scores(W: np.ndarray) -> np.ndarray:
+    """Borda score = mean win rate across all opponents with recorded matches.
+
+    Unlike Copeland, Borda rewards consistent performance rather than just
+    beating the majority — a prompt that wins 60 % of matches against every
+    opponent scores higher than one that dominates two opponents but loses
+    badly to others.
+    """
+    K = W.shape[0]
+    N = W + W.T
+    scores = np.zeros(K)
+    for i in range(K):
+        total = 0.0
+        count = 0
+        for j in range(K):
+            if i != j and N[i, j] > 0:
+                total += W[i, j] / N[i, j]
+                count += 1
+        scores[i] = total / count if count > 0 else 0.0
+    return scores
+
+
+def _elo_scores(
+    W: np.ndarray,
+    k_factor: float = 32.0,
+    initial: float = 1000.0,
+    passes: int = 3,
+) -> np.ndarray:
+    """Elo ratings estimated from the win matrix.
+
+    Runs ``passes`` rounds over all pairs to let ratings converge. Each pair
+    (i, j) with N[i,j] > 0 contributes one "match" with fractional outcome
+    W[i,j] / N[i,j].
+    """
+    K = W.shape[0]
+    ratings = np.full(K, initial, dtype=float)
+    for _ in range(passes):
+        for i in range(K):
+            for j in range(i + 1, K):
+                n_ij = int(W[i, j] + W[j, i])
+                if n_ij == 0:
+                    continue
+                actual_i = W[i, j] / n_ij
+                expected_i = 1.0 / (1.0 + 10.0 ** ((ratings[j] - ratings[i]) / 400.0))
+                delta = k_factor * (actual_i - expected_i)
+                ratings[i] += delta
+                ratings[j] -= delta
+    return ratings
+
+
+def _avg_winrate_scores(W: np.ndarray) -> np.ndarray:
+    """Overall win rate: total wins / total games played."""
+    K = W.shape[0]
+    scores = np.zeros(K)
+    for i in range(K):
+        total_wins = float(W[i].sum())
+        total_games = total_wins + float(W[:, i].sum())
+        scores[i] = total_wins / total_games if total_games > 0 else 0.0
+    return scores
+
+
+def _scores_for_method(W: np.ndarray, method: str) -> np.ndarray:
+    """Return raw scores (higher = better) for a named ranking method."""
+    if method == "copeland":
+        return _copeland_scores(W)
+    if method == "borda":
+        return _borda_scores(W)
+    if method == "elo":
+        return _elo_scores(W)
+    if method == "avg_winrate":
+        return _avg_winrate_scores(W)
+    raise ValueError(f"Unknown ranking method: {method!r}")
+
+
+def _normalize(scores: np.ndarray) -> np.ndarray:
+    """Min-max normalize scores to [0, 1]. Returns zeros if all equal."""
+    mn, mx = scores.min(), scores.max()
+    if mx > mn:
+        return (scores - mn) / (mx - mn)
+    return np.zeros_like(scores)
+
+
+def _fused_ranking(W: np.ndarray, weights: np.ndarray) -> list[int]:
+    """Weighted fusion of all ranking methods.
+
+    Normalizes each method's scores to [0, 1] then combines with the given
+    weights. ``weights`` must have the same length as ``RANKING_METHODS``.
+    """
+    normed = np.stack([_normalize(_scores_for_method(W, m)) for m in RANKING_METHODS])
+    fused = weights @ normed  # shape (K,)
+    return np.argsort(-fused).tolist()
+
+
+def _rank(
+    W: np.ndarray,
+    method: str,
+    method_alphas: np.ndarray | None = None,
+) -> list[int]:
+    """Rank prompts using the specified method.
+
+    Args:
+        W: Win matrix — W[i, j] = times prompt i beat prompt j.
+        method: One of ``RANKING_METHODS``, ``"fused"``, or ``"auto"``.
+        method_alphas: Beta posterior alpha parameters, one per entry in
+            ``RANKING_METHODS``. Only used when ``method="auto"``.  When
+            ``None``, uniform weights are used for fused/auto.
+
+    Returns:
+        Indices sorted best-first.
+    """
+    if method in RANKING_METHODS:
+        return np.argsort(-_scores_for_method(W, method)).tolist()
+
+    rng = np.random.default_rng()
+    n_methods = len(RANKING_METHODS)
+
+    if method == "fused":
+        weights = np.ones(n_methods) / n_methods
+    elif method == "auto":
+        alphas = method_alphas if method_alphas is not None else np.ones(n_methods)
+        weights = rng.dirichlet(alphas)
+    else:
+        raise ValueError(
+            f"Unknown ranking_method {method!r}. "
+            f"Choose from {list(RANKING_METHODS) + ['fused', 'auto']}."
+        )
+
+    return _fused_ranking(W, weights)
+
+
+# Keep the original function for backward compatibility.
+def _copeland_ranking(W: np.ndarray) -> list[int]:
+    """Rank prompts by Copeland score (wins - losses) with win-rate tiebreaker."""
+    return np.argsort(-_copeland_scores(W)).tolist()
 
 
 def _win_rate(W: np.ndarray, idx: int) -> float:
     """Compute the overall win rate for a prompt."""
-    total_wins = W[idx].sum()
-    total_games = W[idx].sum() + W[:, idx].sum()
+    total_wins = float(W[idx].sum())
+    total_games = total_wins + float(W[:, idx].sum())
     return total_wins / total_games if total_games > 0 else 0.0
 
 

@@ -184,10 +184,25 @@ best. Thompson sampling picks pairs to duel; an LLM judge picks the winner
 per example; the win matrix drives rankings. Top prompts are periodically
 mutated to generate new candidates.
 
-PDO uses **adaptive multi-ranker fusion** by default: four ranking methods
-(Copeland, Borda, Elo, avg win-rate) compete, and the optimizer learns which
-is most reliable for the current dataset via Beta posteriors updated from
-champion prediction accuracy each round.
+1. Generate an initial pool of diverse prompts from the base instruction
+2. Each round, Thompson sampling selects two prompts to duel
+3. Both prompts are evaluated on a sample of the dataset
+4. An LLM judge picks the winner on each sample; majority wins the duel
+5. Win matrix is updated; rankings are recalculated
+6. Periodically, the top-ranked prompts are mutated to generate new candidates
+7. Worst performers are pruned to keep the pool manageable
+
+**Adaptive ranking** (`ranking_method="auto"`, the default): rather than using
+a single fixed ranking method, PDO maintains a Beta posterior over four methods
+— Copeland, Borda, Elo, and average win rate. After each round it checks which
+method's predicted champion performed best and increments that method's alpha.
+Dirichlet weights are sampled from those posteriors and used to fuse the four
+rankings. Over time the weights shift toward whichever method is most accurate
+for this dataset. Each round's log shows the current weight distribution:
+
+```
+Ranking weights: copeland=28%, borda=22%, elo=31%, avg_winrate=19% (dominant: elo)
+```
 
 ### Few-shot strategy
 
@@ -279,9 +294,13 @@ pip install "aevyra-reflex[stats]"   # enables Wilcoxon test
 ## Choosing a reasoning model
 
 ```bash
-# Fully local — nothing leaves your machine
+# Ollama — local reasoning, nothing leaves your machine
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.2:1b --reasoning-model ollama/qwen3:8b
+
+# Gemma4 (efficient 4B) via Ollama
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.2:1b --reasoning-model ollama/gemma4:e4b
 
 # DeepSeek R1 for stronger math/logic reasoning
 aevyra-reflex optimize dataset.jsonl prompt.md \
@@ -291,9 +310,13 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 --reasoning-model openai/gpt-4o
 
-# Gemini
+# Gemini 2.0 Flash — fast and cost-effective (GOOGLE_API_KEY)
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 --reasoning-model gemini/gemini-2.0-flash
+
+# Gemini 2.5 Pro — strongest Gemini reasoning model
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 --reasoning-model gemini/gemini-2.5-pro
 
 # Any OpenAI-compatible endpoint (vLLM, TGI, LM Studio, etc.)
 aevyra-reflex optimize dataset.jsonl prompt.md \
@@ -357,7 +380,20 @@ config = OptimizerConfig(
         "duels_per_round": 3,
         "samples_per_duel": 10,
         "initial_pool_size": 6,
-        "ranking_method": "auto",   # adaptive multi-ranker fusion (default)
+        "thompson_alpha": 1.2,
+        "mutation_frequency": 5,
+        "num_top_to_mutate": 2,
+        "max_pool_size": 20,
+        # ranking_method: how to pick the champion each round.
+        #   "auto"        — adaptive fusion (default): learns which method
+        #                   works best for this dataset over time using
+        #                   Thompson-sampled Dirichlet weights.
+        #   "fused"       — equal-weight fusion of all four methods.
+        #   "copeland"    — wins minus losses (original behaviour).
+        #   "borda"       — mean win rate across all opponents.
+        #   "elo"         — Elo rating estimated from the win matrix.
+        #   "avg_winrate" — total wins / total games played.
+        "ranking_method": "auto",
     },
 )
 
