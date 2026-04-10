@@ -146,7 +146,8 @@ Reflex is an agent, not a script. It draws from four optimization axes:
   wording. Label-free aware: shifts automatically from reference comparison to
   quality/instruction-following analysis when the dataset has no ideal answers.
 - **pdo** — tournament-style search over prompt variants using dueling bandits
-  with Thompson sampling and adaptive multi-ranker fusion.
+  with Thompson sampling and adaptive multi-ranker fusion
+  ([arXiv:2510.13907](https://arxiv.org/abs/2510.13907)).
 - **structural** — reorganize the prompt's layout, formatting, and information
   hierarchy.
 - **fewshot** — curate the most informative few-shot examples from the dataset.
