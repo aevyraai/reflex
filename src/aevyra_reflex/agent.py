@@ -185,9 +185,11 @@ def _resolve_agent_backend(
     """Pick the right backend based on provider/model hints.
 
     Resolution order:
-        1. Explicit provider kwarg: "anthropic", "openai", "ollama"
+        1. Explicit provider kwarg: "anthropic", "openai", "ollama", or any
+           alias in PROVIDER_ALIASES (e.g. "gemini", "openrouter", "groq")
         2. Model name heuristics:
            - "claude-*"         → Anthropic
+           - "gemini-*"         → OpenAI-compat against Google's v1beta endpoint
            - "ollama/*" or no / → Ollama  (if base_url looks local or default)
            - everything else    → OpenAI-compatible
         3. base_url heuristics:
@@ -218,6 +220,11 @@ def _resolve_agent_backend(
     if model.startswith("claude"):
         return _AnthropicBackend(model, max_tokens, api_key=api_key)
 
+    if model.startswith("gemini"):
+        alias = PROVIDER_ALIASES["gemini"]
+        resolved_key = api_key or os.environ.get(alias["env_key"])
+        return _OpenAIBackend(model, max_tokens, api_key=resolved_key, base_url=alias["base_url"])
+
     # Check base_url for Ollama
     if base_url and ("localhost:11434" in base_url or "127.0.0.1:11434" in base_url):
         return _OllamaBackend(model, max_tokens, base_url=base_url)
@@ -247,6 +254,10 @@ class LLM:
 
         # Claude (default)
         llm = LLM(model="claude-sonnet-4-20250514")
+
+        # Gemini — via Google's OpenAI-compatible endpoint (GOOGLE_API_KEY)
+        llm = LLM(model="gemini-2.0-flash")
+        llm = LLM(model="gemini-2.5-pro", provider="gemini")
 
         # Local Ollama model
         llm = LLM(model="llama3.1:70b", provider="ollama")
