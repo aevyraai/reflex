@@ -8,6 +8,7 @@ your target — no manual prompt engineering required. Point it at a dataset, a
 model, and a target score. Reflex figures out the rest.
 
 ```bash
+pip install aevyra-reflex
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
 ```
 
