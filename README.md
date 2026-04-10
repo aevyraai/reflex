@@ -295,14 +295,15 @@ pip install "aevyra-reflex[stats]"   # enables Wilcoxon test
 
 ```bash
 # Ollama — local reasoning, nothing leaves your machine
+# Qwen3:8b is the recommended local reasoning model
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.2:1b --reasoning-model ollama/qwen3:8b
 
-# Gemma4 (efficient 4B) via Ollama
+# Gemma4 e4b — good alternative, especially for multilingual tasks
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.2:1b --reasoning-model ollama/gemma4:e4b
 
-# DeepSeek R1 for stronger math/logic reasoning
+# DeepSeek R1 — stronger on math and logic-heavy tasks
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.2:1b --reasoning-model ollama/deepseek-r1:8b
 
