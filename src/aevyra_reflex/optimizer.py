@@ -403,23 +403,35 @@ class PromptOptimizer:
         convos = list(dataset.conversations)
         n = len(convos)
 
+        # Need at least 3 examples for a 3-way split (1 per partition).
+        # Fall back to 2-way (no val) if the dataset is too small.
+        if n < 3:
+            n_test = max(1, n - round(n * train_ratio)) if n > 1 else 0
+            n_train = n - n_test
+            rng = random.Random(seed)
+            indices = list(range(n))
+            rng.shuffle(indices)
+            train_convos = [convos[indices[i]] for i in range(n_train)]
+            test_convos = [convos[indices[i]] for i in range(n_train, n)]
+            return Dataset(conversations=train_convos), None, Dataset(conversations=test_convos)
+
         n_test = max(1, n - round(n * train_ratio))
         n_val = max(1, round(n * val_ratio)) if val_ratio > 0.0 else 0
         n_train = max(1, n - n_test - n_val)
 
         # Guard against rounding pushing total over n
-        while n_train + n_val + n_test > n:
+        while n_train + n_val + n_test > n and n_train > 1:
             n_train -= 1
 
         rng = random.Random(seed)
         indices = list(range(n))
         rng.shuffle(indices)
 
-        train_convos = [convos[indices[i]] for i in range(n_train)]
-        val_convos = [convos[indices[i]] for i in range(n_train, n_train + n_val)]
-        test_convos = [convos[indices[i]] for i in range(n_train + n_val, n)]
+        train_convos = [convos[indices[i]] for i in range(max(0, n_train))]
+        val_convos = [convos[indices[i]] for i in range(max(0, n_train), max(0, n_train + n_val))]
+        test_convos = [convos[indices[i]] for i in range(max(0, n_train + n_val), n)]
 
-        val_ds = Dataset(conversations=val_convos) if n_val > 0 else None
+        val_ds = Dataset(conversations=val_convos) if val_convos else None
         return Dataset(conversations=train_convos), val_ds, Dataset(conversations=test_convos)
 
     def add_provider(

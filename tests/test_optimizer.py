@@ -382,7 +382,7 @@ class TestOptimizerConfigTargetFields:
 
 def _make_fake_optimizer():
     """Return a PromptOptimizer wired with mock providers/metrics/dataset."""
-    optimizer = PromptOptimizer(config=OptimizerConfig(max_iterations=1, score_threshold=0.9))
+    optimizer = PromptOptimizer(config=OptimizerConfig(max_iterations=1, score_threshold=0.9, val_ratio=0.0))
 
     # Fake dataset
     ds = MagicMock()
