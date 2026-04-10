@@ -110,6 +110,10 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
                 reasoning_model = reasoning_raw
 
         source_model = config_dict.get("source_model", "").strip() or None
+        reasoning_base_url = config_dict.get("reasoning_base_url", "").strip() or None
+
+        max_tokens  = int(config_dict.get("max_tokens",  1024))
+        max_workers = int(config_dict.get("max_workers", 4))
 
         train_ratio = float(config_dict.get("train_ratio", 0.8))
         val_ratio = float(config_dict.get("val_ratio", 0.0))
@@ -124,6 +128,14 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             ranking_method = config_dict.get("ranking_method", "auto")
             if ranking_method:
                 extra_kwargs["ranking_method"] = ranking_method
+            for pdo_key, default in (
+                ("duels_per_round", 3),
+                ("samples_per_duel", 10),
+                ("initial_pool_size", 6),
+            ):
+                val = config_dict.get(pdo_key)
+                if val is not None:
+                    extra_kwargs[pdo_key] = int(val)
 
         config = OptimizerConfig(
             strategy=strategy,
@@ -131,9 +143,12 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             score_threshold=score_threshold,
             reasoning_model=reasoning_model,
             reasoning_provider=reasoning_provider,
+            reasoning_base_url=reasoning_base_url,
             target_model=target_model_label,
             target_source=target_source or ("manual" if not verdict_path and not target_models else None),
             source_model=source_model,
+            max_tokens=max_tokens,
+            max_workers=max_workers,
             train_ratio=train_ratio,
             val_ratio=val_ratio,
             early_stopping_patience=early_stopping_patience,
