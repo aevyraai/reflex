@@ -115,6 +115,8 @@ class StructuralStrategy(Strategy):
         agent: Agent,
         config: Any,
         on_iteration: Any | None = None,
+        resume_state: dict | None = None,
+        update_strategy_state: Any | None = None,
     ) -> OptimizationResult:
         from aevyra_reflex.strategies.iterative import _run_eval
 

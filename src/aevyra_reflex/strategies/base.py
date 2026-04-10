@@ -42,6 +42,8 @@ class Strategy(ABC):
         agent: Agent,
         config: Any,  # OptimizerConfig
         on_iteration: Any | None = None,
+        resume_state: dict | None = None,
+        update_strategy_state: Any | None = None,
     ) -> OptimizationResult:
         """Run the optimization loop.
 

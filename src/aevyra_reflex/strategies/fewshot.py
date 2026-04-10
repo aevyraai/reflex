@@ -68,6 +68,8 @@ class FewShotStrategy(Strategy):
         agent: Agent,
         config: Any,
         on_iteration: Any | None = None,
+        resume_state: dict | None = None,
+        update_strategy_state: Any | None = None,
     ) -> OptimizationResult:
         if not dataset.has_ideals():
             raise ValueError(
