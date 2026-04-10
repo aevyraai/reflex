@@ -70,13 +70,13 @@ def _split_3way(convos, train_ratio, val_ratio, seed=42):
 
 class TestOptimizerConfigValFields(unittest.TestCase):
 
-    def test_val_ratio_default_zero(self):
+    def test_val_ratio_default(self):
         c = OptimizerConfig()
-        self.assertEqual(c.val_ratio, 0.0)
+        self.assertEqual(c.val_ratio, 0.1)
 
-    def test_early_stopping_patience_default_zero(self):
+    def test_early_stopping_patience_default(self):
         c = OptimizerConfig()
-        self.assertEqual(c.early_stopping_patience, 0)
+        self.assertEqual(c.early_stopping_patience, 3)
 
     def test_val_ratio_custom(self):
         c = OptimizerConfig(val_ratio=0.1)

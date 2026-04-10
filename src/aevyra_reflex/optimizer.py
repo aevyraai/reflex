@@ -251,25 +251,25 @@ class OptimizerConfig:
     Set to 1.0 to use the full dataset for everything (no split).
     Default: 0.8 (80% train / 20% test)."""
 
-    val_ratio: float = 0.0
+    val_ratio: float = 0.1
     """Fraction of the total dataset reserved as a validation set, carved out of
     the training portion. Used to detect overfitting mid-run: if the val score
     plateaus while train scores keep climbing, the prompt is fitting the training
-    examples specifically. Set to 0.0 (default) to disable validation splitting.
+    examples specifically. Set to 0.0 to disable validation splitting.
 
-    With train_ratio=0.8 and val_ratio=0.1, the actual split is:
+    With train_ratio=0.8 and val_ratio=0.1 (the defaults), the actual split is:
       70% train  /  10% val  /  20% test
 
     Requires train_ratio - val_ratio >= 0.1 (at least 10% left for training)."""
 
-    early_stopping_patience: int = 0
+    early_stopping_patience: int = 3
     """Stop optimization early if the validation score has not improved for this
     many consecutive iterations. Only takes effect when val_ratio > 0.
-    Set to 0 (default) to disable. When early stopping triggers, the prompt with
+    Set to 0 to disable. When early stopping triggers, the prompt with
     the best validation score is returned (not the most recent prompt).
 
-    Recommended values: 2–4 iterations. Smaller values stop sooner (risk of
-    stopping too early on noise); larger values are more conservative."""
+    Default: 3. Recommended values: 2–4 iterations. Smaller values stop sooner
+    (risk of stopping too early on noise); larger values are more conservative."""
 
     batch_size: int = 0
     """Mini-batch size per optimization iteration. 0 (default) = full training
@@ -403,23 +403,35 @@ class PromptOptimizer:
         convos = list(dataset.conversations)
         n = len(convos)
 
+        # Need at least 3 examples for a 3-way split (1 per partition).
+        # Fall back to 2-way (no val) if the dataset is too small.
+        if n < 3:
+            n_test = max(1, n - round(n * train_ratio)) if n > 1 else 0
+            n_train = n - n_test
+            rng = random.Random(seed)
+            indices = list(range(n))
+            rng.shuffle(indices)
+            train_convos = [convos[indices[i]] for i in range(n_train)]
+            test_convos = [convos[indices[i]] for i in range(n_train, n)]
+            return Dataset(conversations=train_convos), None, Dataset(conversations=test_convos)
+
         n_test = max(1, n - round(n * train_ratio))
         n_val = max(1, round(n * val_ratio)) if val_ratio > 0.0 else 0
         n_train = max(1, n - n_test - n_val)
 
         # Guard against rounding pushing total over n
-        while n_train + n_val + n_test > n:
+        while n_train + n_val + n_test > n and n_train > 1:
             n_train -= 1
 
         rng = random.Random(seed)
         indices = list(range(n))
         rng.shuffle(indices)
 
-        train_convos = [convos[indices[i]] for i in range(n_train)]
-        val_convos = [convos[indices[i]] for i in range(n_train, n_train + n_val)]
-        test_convos = [convos[indices[i]] for i in range(n_train + n_val, n)]
+        train_convos = [convos[indices[i]] for i in range(max(0, n_train))]
+        val_convos = [convos[indices[i]] for i in range(max(0, n_train), max(0, n_train + n_val))]
+        test_convos = [convos[indices[i]] for i in range(max(0, n_train + n_val), n)]
 
-        val_ds = Dataset(conversations=val_convos) if n_val > 0 else None
+        val_ds = Dataset(conversations=val_convos) if val_convos else None
         return Dataset(conversations=train_convos), val_ds, Dataset(conversations=test_convos)
 
     def add_provider(
@@ -777,6 +789,7 @@ class PromptOptimizer:
             "best_val_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
             "best_val_score": -1.0,
             "trajectory": list(checkpoint.score_trajectory) if checkpoint else [],
+            "strategy_state": dict(checkpoint.strategy_state) if checkpoint and checkpoint.strategy_state else {},
         }
 
         # Wrap the on_iteration callback to save checkpoints and run val eval
@@ -821,6 +834,7 @@ class PromptOptimizer:
                     best_score=_es["best_train_score"],
                     score_trajectory=list(_es["trajectory"]),
                     previous_reasoning=record.reasoning,
+                    strategy_state=dict(_es["strategy_state"]),
                     baseline={
                         "mean_score": baseline.mean_score,
                         "scores_by_metric": baseline.scores_by_metric,
@@ -863,6 +877,10 @@ class PromptOptimizer:
                         )
                         raise _EarlyStop()
 
+        def _update_strategy_state(state: dict) -> None:
+            """Called by strategies to persist phase/iteration state into checkpoints."""
+            _es["strategy_state"].update(state)
+
         _early_stopped = False
         try:
             result = strategy.run(
@@ -873,6 +891,7 @@ class PromptOptimizer:
                 agent=llm,
                 config=self.config,
                 on_iteration=_checkpointing_callback,
+                update_strategy_state=_update_strategy_state,
                 **({"resume_state": checkpoint.strategy_state} if checkpoint and checkpoint.strategy_state else {}),
             )
         except _EarlyStop:
@@ -901,6 +920,9 @@ class PromptOptimizer:
         result.final = final
         result.final.system_prompt = result.best_prompt
         result.best_score = final.mean_score
+        # Convergence is based on the held-out test score, not training score.
+        # A prompt that hit the threshold on train but not test has not converged.
+        result.converged = final.mean_score >= self.config.score_threshold
         if not result.strategy_name:
             result.strategy_name = self.config.strategy
 

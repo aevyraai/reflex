@@ -120,6 +120,28 @@ def optimize(
         int,
         typer.Option("--max-workers", help="Max parallel threads for variant evals/duels. For Ollama, match to OLLAMA_NUM_PARALLEL."),
     ] = 4,
+    input_field: Annotated[
+        Optional[str],
+        typer.Option(
+            "--input-field",
+            help=(
+                "Field name to use as the user message when your JSONL doesn't match "
+                "a standard schema (OpenAI/ShareGPT/Alpaca). "
+                "Example: --input-field question"
+            ),
+        ),
+    ] = None,
+    output_field: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output-field",
+            help=(
+                "Field name to use as the reference answer when your JSONL doesn't match "
+                "a standard schema. Omit for label-free datasets. "
+                "Example: --output-field answer"
+            ),
+        ),
+    ] = None,
     run_dir: Annotated[
         Optional[Path],
         typer.Option("--run-dir", help="Directory for run history. Defaults to .reflex/ in cwd."),
@@ -188,11 +210,11 @@ def optimize(
                 "Fraction of data reserved as a validation set (0.0–1.0, exclusive). "
                 "Carved from the training portion; test size is unaffected. "
                 "Val scores are evaluated after each iteration to detect overfitting. "
-                "Set to 0.0 (default) to disable. "
+                "Default: 0.1 (10%% val). Set to 0.0 to disable. "
                 "Example: --train-split 0.8 --val-split 0.1 → 70%% train / 10%% val / 20%% test."
             ),
         ),
-    ] = 0.0,
+    ] = 0.1,
     early_stopping_patience: Annotated[
         int,
         typer.Option(
@@ -200,10 +222,10 @@ def optimize(
             help=(
                 "Stop optimization when val score has not improved for N consecutive "
                 "iterations. Only active when --val-split > 0. "
-                "Set to 0 (default) to disable. Recommended: 2–4."
+                "Default: 3. Set to 0 to disable. Recommended: 2–4."
             ),
         ),
-    ] = 0,
+    ] = 3,
     verbose: Annotated[
         bool,
         typer.Option("-v", "--verbose", help="Show debug output."),
@@ -256,7 +278,7 @@ def optimize(
 
     # Load
     from aevyra_verdict import Dataset
-    ds = Dataset.from_jsonl(str(dataset))
+    ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
     initial_prompt = prompt.read_text().strip()
 
     # Resolve the score threshold.

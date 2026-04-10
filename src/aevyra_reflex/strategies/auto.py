@@ -88,6 +88,8 @@ class AutoStrategy(Strategy):
         agent: Agent,
         config: Any,
         on_iteration: Any | None = None,
+        resume_state: dict[str, Any] | None = None,
+        update_strategy_state: Any | None = None,
     ) -> OptimizationResult:
         extra = config.extra_kwargs or {}
         a_config = _AutoConfig(
@@ -98,13 +100,25 @@ class AutoStrategy(Strategy):
         )
         phase_budgets = a_config.phase_budgets or dict(DEFAULT_PHASE_BUDGETS)
 
+        # Restore phase state from checkpoint if resuming
+        rs = resume_state or {}
+        resume_phase_idx: int = rs.get("phase_idx", 0)
+        resume_phase_iters_done: int = rs.get("phase_iters_done", 0)
+        is_resuming = bool(rs)
+
         # Global state across all phases
         current_prompt = initial_prompt
         all_iterations: list[IterationRecord] = []
-        axes_used: list[str] = []
-        phase_history: list[dict[str, Any]] = []
-        global_iter = 0
-        last_phase_score = 0.0  # tracks the best score entering each phase
+        axes_used: list[str] = list(rs.get("axes_used", []))
+        phase_history: list[dict[str, Any]] = list(rs.get("phase_history", []))
+        global_iter: int = rs.get("global_iter", 0)
+        last_phase_score: float = rs.get("last_phase_score", 0.0)
+
+        if is_resuming:
+            logger.info(
+                f"[auto] Resuming from phase {resume_phase_idx + 1}, "
+                f"{resume_phase_iters_done} iteration(s) already done in that phase"
+            )
 
         # fewshot requires labeled examples — exclude it for label-free datasets
         available_axes = list(AXES)
@@ -114,10 +128,22 @@ class AutoStrategy(Strategy):
 
         for phase_idx in range(a_config.max_phases):
             # ----------------------------------------------------------
+            # 0. Skip phases already completed before the crash
+            # ----------------------------------------------------------
+            if is_resuming and phase_idx < resume_phase_idx:
+                logger.info(f"[auto] Skipping phase {phase_idx + 1} (already completed before crash)")
+                continue
+
+            # ----------------------------------------------------------
             # 1. Decide which axis to use
             # ----------------------------------------------------------
-            if phase_idx == 0 and a_config.start_structural:
+            if is_resuming and phase_idx == resume_phase_idx and axes_used:
+                # Resume mid-phase: axis was already decided, reuse the saved one
+                axis = axes_used[-1]
+                logger.info(f"[auto] Resuming phase {phase_idx + 1} with axis '{axis}'")
+            elif phase_idx == 0 and a_config.start_structural:
                 axis = "structural"
+                axes_used.append(axis)
             else:
                 axis = agent.recommend_axis(
                     current_prompt=current_prompt,
@@ -130,17 +156,26 @@ class AutoStrategy(Strategy):
                 if axis not in AXES:
                     logger.warning(f"Agent recommended unknown axis {axis!r}, falling back to iterative")
                     axis = "iterative"
+                axes_used.append(axis)
 
-            axes_used.append(axis)
+            full_budget = phase_budgets.get(axis, 3)
+            # For the phase that was in-progress, subtract already-done iterations
+            iters_already_done = resume_phase_iters_done if (is_resuming and phase_idx == resume_phase_idx) else 0
             phase_budget = min(
-                phase_budgets.get(axis, 3),
+                full_budget - iters_already_done,
                 config.max_iterations - global_iter,
             )
             if phase_budget <= 0:
                 logger.info("Global iteration budget exhausted.")
                 break
 
-            logger.info(f"Phase {phase_idx + 1}: applying '{axis}' for up to {phase_budget} iterations")
+            if iters_already_done > 0:
+                logger.info(
+                    f"Phase {phase_idx + 1}: resuming '{axis}' — "
+                    f"{iters_already_done}/{full_budget} done, {phase_budget} remaining"
+                )
+            else:
+                logger.info(f"Phase {phase_idx + 1}: applying '{axis}' for up to {phase_budget} iterations")
 
             # ----------------------------------------------------------
             # 2. Build a sub-config for this phase
@@ -164,19 +199,31 @@ class AutoStrategy(Strategy):
             from aevyra_reflex.strategies import get_strategy
 
             sub_strategy = get_strategy(axis)()
+            _phase_iters_this_run = 0
 
-            def _phase_callback(record: IterationRecord) -> None:
+            def _phase_callback(record: IterationRecord, _axis: str = axis, _phase_idx: int = phase_idx) -> None:
                 # Re-number iterations globally
-                nonlocal global_iter
+                nonlocal global_iter, _phase_iters_this_run
                 global_iter += 1
+                _phase_iters_this_run += 1
                 record = IterationRecord(
                     iteration=global_iter,
                     system_prompt=record.system_prompt,
                     score=record.score,
                     scores_by_metric=record.scores_by_metric,
-                    reasoning=f"[{axis}] {record.reasoning}",
+                    reasoning=f"[{_axis}] {record.reasoning}",
                 )
                 all_iterations.append(record)
+                # Persist phase state so resume can skip completed work
+                if update_strategy_state:
+                    update_strategy_state({
+                        "phase_idx": _phase_idx,
+                        "phase_iters_done": iters_already_done + _phase_iters_this_run,
+                        "axes_used": list(axes_used),
+                        "phase_history": list(phase_history),
+                        "global_iter": global_iter,
+                        "last_phase_score": last_phase_score,
+                    })
                 if on_iteration:
                     on_iteration(record)
 
@@ -208,6 +255,11 @@ class AutoStrategy(Strategy):
             # ----------------------------------------------------------
             # 4. Record phase outcome
             # ----------------------------------------------------------
+            # After completing the resumed phase, clear resume state so
+            # subsequent phases run normally.
+            if is_resuming and phase_idx == resume_phase_idx:
+                is_resuming = False
+
             # For the first phase, use the sub-strategy's first iteration
             # score as the "before" (since no baseline was run inside auto).
             if phase_idx == 0 and sub_result.iterations:
@@ -223,8 +275,19 @@ class AutoStrategy(Strategy):
                 "converged": sub_result.converged,
             })
             last_phase_score = sub_result.best_score
-
             current_prompt = sub_result.best_prompt
+
+            # Advance the checkpoint to the next phase so a crash between
+            # phases doesn't re-run this one
+            if update_strategy_state:
+                update_strategy_state({
+                    "phase_idx": phase_idx + 1,
+                    "phase_iters_done": 0,
+                    "axes_used": list(axes_used),
+                    "phase_history": list(phase_history),
+                    "global_iter": global_iter,
+                    "last_phase_score": last_phase_score,
+                })
 
             logger.info(
                 f"  Phase {phase_idx + 1} ({axis}) done: "

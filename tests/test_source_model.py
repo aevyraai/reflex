@@ -171,6 +171,7 @@ class TestOptimizerPassesSourceModel:
         config = OptimizerConfig(
             strategy="iterative",
             source_model="gpt-4o",
+            val_ratio=0.0,
         )
         opt = PromptOptimizer(config=config)
 

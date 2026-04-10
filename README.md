@@ -2,13 +2,12 @@
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
 
-Agentic prompt optimization. Reflex reads your eval results, diagnoses why
-your model is underperforming, and rewrites the prompt until the scores match
-your target — no manual prompt engineering required. Point it at a dataset, a
-model, and a target score. Reflex figures out the rest.
+Agentic prompt optimization. Reflex takes your dataset and prompt, runs evals, diagnoses why
+scores are falling short, and rewrites the prompt — iterating until it converges. Works for
+improving an existing prompt, migrating one to a new model, or closing the gap to your best
+model's score. No manual prompt engineering required.
 
 ```bash
-pip install aevyra-reflex
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
 ```
 
@@ -79,7 +78,8 @@ One command runs baseline eval, optimizes the prompt, re-evaluates, and shows
 a before/after comparison:
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
+aevyra-reflex optimize examples/summarization.jsonl examples/summarization_prompt.md \
+  -m local/llama3.1 -o best_prompt.md
 ```
 
 Output:
@@ -88,8 +88,8 @@ Output:
 ====================================================
   aevyra-reflex
 ====================================================
-  Dataset    : dataset.jsonl (50 samples)
-  Split      : 40 train / 10 test (80% / 20%)
+  Dataset    : summarization.jsonl (20 samples)
+  Split      : 35 train / 5 val / 10 test (70% / 10% / 20%)
   Model(s)   : local/llama3.1
   Strategy   : auto
   Metrics    : rouge
@@ -109,7 +109,7 @@ Step 3/3  Verifying...
 ====================================================
   OPTIMIZATION RESULTS
 ====================================================
-  Train / test     : 40 / 10 samples
+  Train / val / test : 35 / 5 / 10 samples
   Baseline score   : 0.5821  (on 10-sample test set)
   Final score      : 0.8612  (on 10-sample test set)
   Improvement      : +0.2791 (+47.9%)
@@ -142,6 +142,26 @@ result = (
 print(result.summary())
 print(result.best_prompt)
 ```
+
+## Workflows
+
+### Find the prompt ceiling
+
+Use [aevyra-verdict](https://github.com/aevyraai/verdict) to benchmark your prompt across
+multiple models and find the best achievable score on your dataset:
+
+```bash
+aevyra-verdict run dataset.jsonl --config models.yaml -o results.json
+```
+
+Then use that score as the target for reflex to close the gap on a smaller or faster model:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --target 0.87
+```
+
+Reflex will optimize the prompt to match what your best model achieved — without switching
+models.
 
 ## How it works
 
@@ -243,14 +263,15 @@ aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --resume-from 0
 aevyra-reflex runs
 ```
 
-## Honest eval scores with train/test split
+## Honest eval scores with train/val/test split
 
-Reflex holds out 20% of your dataset for evaluation by default. The
-optimization loop only sees training examples — preventing inflated scores.
+Reflex uses a 70/10/20 split by default. The optimization loop only sees
+training examples; the val set tracks overfitting per-iteration; the test set
+is used exclusively for baseline and final scores.
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1                   # 80/20 split
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 0.9
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1                   # 70/10/20 split (default)
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --val-split 0.0   # 80/20, no val
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 1.0 # no split
 ```
 
@@ -278,9 +299,17 @@ aevyra-reflex optimize dataset.jsonl gpt4o_prompt.md \
 
 ## Validation split and early stopping
 
+Val split (10%) and early stopping (patience 3) are on by default. To disable:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --val-split 0.0
+```
+
+To tune:
+
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 \
-  --train-split 0.8 --val-split 0.1 --early-stopping-patience 3
+  --train-split 0.8 --val-split 0.1 --early-stopping-patience 5
 ```
 
 ## Statistical significance

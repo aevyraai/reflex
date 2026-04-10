@@ -57,6 +57,8 @@ class PDOStrategy(Strategy):
         agent: Agent,
         config: Any,
         on_iteration: Any | None = None,
+        resume_state: dict | None = None,
+        update_strategy_state: Any | None = None,
     ) -> OptimizationResult:
         pdo_config = _PDOConfig.from_optimizer_config(config)
 
