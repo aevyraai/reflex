@@ -157,6 +157,13 @@ Iter 1 (score: 0.6234, Δ+0.0871 — ✓ helped): Added numbered reasoning steps
 Iter 2 (score: 0.7105, Δ+0.0029 — ✗ no effect): Added "think carefully" instruction
 ```
 
+The iterative strategy is **label-free aware**: when the dataset has no ideal
+answers, the diagnosis prompt automatically shifts its framing — telling the
+reasoning model that scores come from an LLM judge and that it should focus on
+quality, clarity, format, and instruction-following failures rather than
+reference comparison. This makes iterative a good default strategy for
+open-ended tasks like chat, summarization, or creative writing.
+
 ### PDO strategy
 
 Maintains a pool of candidate prompts and uses dueling bandits to find the best:
