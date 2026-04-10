@@ -172,9 +172,21 @@ Maintains a pool of candidate prompts and uses dueling bandits to find the best:
 2. Each round, Thompson sampling selects two prompts to duel
 3. Both prompts are evaluated on a sample of the dataset
 4. An LLM judge picks the winner on each sample; majority wins the duel
-5. Win matrix is updated; Copeland rankings are recalculated
+5. Win matrix is updated; rankings are recalculated
 6. Periodically, the top-ranked prompts are mutated to generate new candidates
 7. Worst performers are pruned to keep the pool manageable
+
+**Adaptive ranking** (`ranking_method="auto"`, the default): rather than using
+a single fixed ranking method, PDO maintains a Beta posterior over four methods
+— Copeland, Borda, Elo, and average win rate. After each round it checks which
+method's predicted champion performed best and increments that method's alpha.
+Dirichlet weights are sampled from those posteriors and used to fuse the four
+rankings. Over time the weights shift toward whichever method is most accurate
+for this dataset. Each round's log shows the current weight distribution:
+
+```
+Ranking weights: copeland=28%, borda=22%, elo=31%, avg_winrate=19% (dominant: elo)
+```
 
 The PDO strategy is inspired by Meta's Prompt Duel Optimizer but rebuilt on
 top of verdict's evaluation infrastructure.
@@ -595,6 +607,16 @@ config = OptimizerConfig(
         "mutation_frequency": 5,
         "num_top_to_mutate": 2,
         "max_pool_size": 20,
+        # ranking_method: how to pick the champion each round.
+        #   "auto"        — adaptive fusion (default): learns which method
+        #                   works best for this dataset over time using
+        #                   Thompson-sampled Dirichlet weights.
+        #   "fused"       — equal-weight fusion of all four methods.
+        #   "copeland"    — wins minus losses (original behaviour).
+        #   "borda"       — mean win rate across all opponents.
+        #   "elo"         — Elo rating estimated from the win matrix.
+        #   "avg_winrate" — total wins / total games played.
+        "ranking_method": "auto",
     },
 )
 # Few-shot
