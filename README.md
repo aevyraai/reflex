@@ -27,6 +27,10 @@ Opens `http://localhost:8128` with score trajectory charts, prompt diffs
 between iterations, reasoning analysis, token usage, and config snapshots.
 Click into any run to see exactly what the reasoning model changed and why.
 
+![Optimization runs list](docs/images/dashboard-runs-list.jpg)
+
+![Run detail view](docs/images/dashboard-run-detail.jpg)
+
 **Branch runs** let you pick any iteration from a completed or interrupted run
 and continue optimizing from that point with a different strategy — no
 baseline re-evaluation required. Hover over any iteration card and click `⎇`.
