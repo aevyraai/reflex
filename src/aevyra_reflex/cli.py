@@ -365,7 +365,7 @@ def optimize(
             raise typer.Exit(code=1)
         optimizer.add_provider(parts[0], parts[1])
 
-    _add_metrics(optimizer, metric, judge)
+    _add_metrics(optimizer, metric, judge, ds)
 
     # If --target models were given, benchmark them now to set the threshold
     if target and threshold is None and not verdict_results:
@@ -404,9 +404,9 @@ def optimize(
         target_model_label = config.target_model
 
     # Banner
-    metric_display = ', '.join(metric) if metric else 'rouge'
-    if judge:
-        metric_display += ' + LLM judge' if metric_display != 'rouge' else 'LLM judge'
+    metric_display = ', '.join(metric) if metric else ('LLM judge' if judge else 'rouge')
+    if judge and metric:
+        metric_display += ' + LLM judge'
 
     threshold_display = f"{effective_threshold:.4f}"
     if target_model_label:
@@ -796,7 +796,7 @@ def _make_progress_cb(typer_mod):
     return callback
 
 
-def _add_metrics(optimizer, metric_names: list[str], judge: str | None) -> None:
+def _add_metrics(optimizer, metric_names: list[str], judge: str | None, dataset: Any = None) -> None:
     """Resolve metric names to verdict Metric instances."""
     from aevyra_verdict import BleuScore, ExactMatch, LLMJudge, RougeScore
     from aevyra_verdict.providers import get_provider
@@ -812,9 +812,30 @@ def _add_metrics(optimizer, metric_names: list[str], judge: str | None) -> None:
         typer.echo("Error: use --metric or --judge, not both.", err=True)
         raise typer.Exit(code=1)
 
-    # If neither specified, default to rouge
+    # If neither specified, pick based on whether the dataset has labels.
+    # Label-free datasets can't use reference metrics — require --judge.
     if not metric_names and not judge:
+        has_labels = dataset.has_ideals() if dataset is not None else True
+        if not has_labels:
+            typer.echo(
+                "Error: dataset has no ideal answers (label-free). "
+                "Reference metrics (rouge, bleu, exact) require labels.\n"
+                "Use --judge provider/model to evaluate with an LLM judge instead.\n"
+                "Example: --judge openai/gpt-4o",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         metric_names = ["rouge"]
+
+    # Catch explicit reference metrics on label-free datasets
+    if metric_names and dataset is not None and not dataset.has_ideals():
+        typer.echo(
+            f"Error: dataset has no ideal answers (label-free). "
+            f"Metrics {metric_names} require reference answers.\n"
+            f"Use --judge provider/model instead.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     for name in metric_names:
         name_lower = name.lower()

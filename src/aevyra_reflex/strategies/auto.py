@@ -106,6 +106,12 @@ class AutoStrategy(Strategy):
         global_iter = 0
         last_phase_score = 0.0  # tracks the best score entering each phase
 
+        # fewshot requires labeled examples — exclude it for label-free datasets
+        available_axes = list(AXES)
+        if not dataset.has_ideals() and "fewshot" in available_axes:
+            available_axes.remove("fewshot")
+            logger.info("Label-free dataset — excluding fewshot axis (requires ideal answers)")
+
         for phase_idx in range(a_config.max_phases):
             # ----------------------------------------------------------
             # 1. Decide which axis to use
@@ -117,7 +123,7 @@ class AutoStrategy(Strategy):
                     current_prompt=current_prompt,
                     dataset_sample=_sample_inputs(dataset, n=5),
                     phase_history=phase_history,
-                    axes_available=[a for a in AXES if a not in axes_used],
+                    axes_available=[a for a in available_axes if a not in axes_used],
                     axes_used=axes_used,
                 )
                 # Validate

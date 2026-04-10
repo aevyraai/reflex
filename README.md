@@ -602,6 +602,52 @@ config = OptimizerConfig(
 )
 ```
 
+## Label-free evaluation
+
+Reflex works with datasets that have no reference answers — for example,
+open-ended creative tasks, summarization, or chat responses. When there is no
+ideal answer to compare against, use an LLM judge instead of ROUGE/BLEU/exact
+match.
+
+**CLI**:
+
+```bash
+# Label-free dataset — must supply --judge
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --judge openai/gpt-4o \
+  -o best_prompt.md
+```
+
+If the dataset has no ideal answers and no `--judge` is supplied, reflex
+exits early with an error explaining what to do.
+
+**Python API**:
+
+```python
+from aevyra_verdict import Dataset, LLMJudge
+from aevyra_reflex import PromptOptimizer, OptimizerConfig
+
+dataset = Dataset.from_jsonl("dataset.jsonl")   # no ideal answers
+
+result = (
+    PromptOptimizer(OptimizerConfig(strategy="auto"))
+    .set_dataset(dataset)
+    .add_provider("openai", "gpt-4o-mini")
+    .add_metric(LLMJudge(judge_provider="openai", judge_model="gpt-4o"))
+    .run("You are a helpful assistant.")
+)
+```
+
+**Notes**:
+- `fewshot` strategy requires labeled examples to build demonstrations, so the
+  `auto` strategy automatically excludes it for label-free datasets. All other
+  strategies (iterative, structural, pdo) work without labels.
+- PDO's pairwise judge adapts its evaluation criteria based on whether a
+  reference answer is present: when there is no ideal, it evaluates on quality,
+  instruction-following, and conciseness rather than correctness against a
+  reference.
+
 ## Status
 
 > Core implementation is complete. All four strategies (iterative, PDO,

@@ -195,6 +195,21 @@ Return exactly one mutated system prompt. No explanation — just the prompt tex
 # PDO strategy — pairwise judging
 # ---------------------------------------------------------------------------
 
+# Use when the dataset has ideal / reference answers.
+PAIRWISE_CRITERIA_WITH_IDEAL = """\
+## Evaluation criteria
+1. **Correctness (50%)** — Does the answer match the reference answer and the factual reality?
+2. **Quality (30%)** — Is the reasoning clear, complete, and well-structured?
+3. **Instruction following (20%)** — Does the response follow the format and constraints?"""
+
+# Use when the dataset has NO ideal answers (open-ended / label-free tasks).
+# Removes the reference-comparison framing and rebalances the weights.
+PAIRWISE_CRITERIA_LABEL_FREE = """\
+## Evaluation criteria
+1. **Quality (50%)** — Is the response accurate, clear, complete, and well-reasoned?
+2. **Instruction following (30%)** — Does the response follow the format and constraints in the task?
+3. **Conciseness (20%)** — Is the response appropriately focused — no unnecessary filler or repetition?"""
+
 PAIRWISE_JUDGE_PROMPT = """\
 You are an impartial judge evaluating two competing responses to the same task.
 
@@ -209,10 +224,7 @@ You are an impartial judge evaluating two competing responses to the same task.
 
 {ideal_section}
 
-## Evaluation criteria
-1. **Correctness (50%)** — Does the answer match the expected output / factual reality?
-2. **Quality (30%)** — Is the reasoning clear, complete, and well-structured?
-3. **Instruction following (20%)** — Does the response follow the format and constraints?
+{criteria_section}
 
 ## Instructions
 - Compare both responses carefully against the criteria

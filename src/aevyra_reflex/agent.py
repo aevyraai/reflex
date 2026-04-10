@@ -607,15 +607,27 @@ class LLM:
         response_b: str,
         ideal: str | None = None,
     ) -> str:
-        """Judge which of two responses is better. Returns 'A' or 'B'."""
-        from aevyra_reflex.prompts import PAIRWISE_JUDGE_PROMPT
+        """Judge which of two responses is better. Returns 'A' or 'B'.
+
+        When ``ideal`` is provided the judge uses reference-comparison criteria
+        (correctness 50 %).  When it is ``None`` (label-free tasks) the judge
+        switches to quality / instruction-following / conciseness criteria so
+        the comparison is not biased toward a non-existent reference answer.
+        """
+        from aevyra_reflex.prompts import (
+            PAIRWISE_JUDGE_PROMPT,
+            PAIRWISE_CRITERIA_WITH_IDEAL,
+            PAIRWISE_CRITERIA_LABEL_FREE,
+        )
 
         ideal_section = f"## Reference answer\n{ideal}" if ideal else ""
+        criteria_section = PAIRWISE_CRITERIA_WITH_IDEAL if ideal else PAIRWISE_CRITERIA_LABEL_FREE
         prompt = PAIRWISE_JUDGE_PROMPT.format(
             question=question,
             response_a=response_a,
             response_b=response_b,
             ideal_section=ideal_section,
+            criteria_section=criteria_section,
         )
         response = self.generate(prompt, temperature=0.0)
         return _extract_winner(response)
