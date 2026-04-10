@@ -69,6 +69,19 @@ Do NOT attempt to answer the questions. Keep the summary to 3-5 sentences.
 # Iterative strategy
 # ---------------------------------------------------------------------------
 
+# Injected into diagnosis/refine prompts for label-free (no ideal answers) tasks.
+# Tells the reasoning model not to look for reference-comparison failures and
+# instead focus on quality, clarity, and instruction-following.
+LABEL_FREE_EVAL_CONTEXT = """\
+## Evaluation note
+This is a **label-free task** — the dataset has no reference answers. \
+Scores come from an LLM judge evaluating response quality, not from \
+comparison to a ground-truth answer. When diagnosing failures, focus on \
+quality issues such as: unclear or incomplete reasoning, insufficient detail, \
+wrong output format, constraint violations, or unhelpful/vague responses. \
+Do not look for "correct" answers — there are none defined.
+"""
+
 DIAGNOSE_FAILURES_PROMPT = """\
 You are an expert prompt engineer analyzing why a system prompt is \
 underperforming on certain eval samples.
@@ -81,6 +94,7 @@ The model using this system prompt is being evaluated on a dataset. Below are \
 samples where it scored poorly. For each sample you can see the input, the \
 model's response, the reference answer (if available), and the score.
 
+{eval_context}\
 ## Failing samples
 {failing_samples}
 
@@ -129,6 +143,7 @@ What you tried in previous iterations and what effect each change had:
 ## Current eval results
 Mean score: {mean_score:.4f} (target: {target_score:.4f})
 
+{eval_context}\
 ## Failing samples from this iteration
 {failing_samples}
 

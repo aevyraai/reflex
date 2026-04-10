@@ -54,6 +54,7 @@ class IterativeStrategy(Strategy):
         iterations: list[IterationRecord] = []
         previous_reasoning = ""
         rewrite_log: list[dict] = []  # causal history: what was tried and what happened
+        label_free = not dataset.has_ideals()
 
         run_config = RunConfig(
             temperature=config.eval_temperature,
@@ -125,6 +126,7 @@ class IterativeStrategy(Strategy):
                 revised, reasoning, change_summary = agent.diagnose_and_revise(
                     system_prompt=current_prompt,
                     failing_samples=failing_samples,
+                    label_free=label_free,
                 )
             else:
                 logger.info(f"{tag} Refining prompt (rewrite log: {len(rewrite_log)} entries)...")
@@ -137,6 +139,7 @@ class IterativeStrategy(Strategy):
                     failing_samples=failing_samples,
                     previous_reasoning=previous_reasoning,
                     rewrite_log=rewrite_log,
+                    label_free=label_free,
                 )
             record.reasoning_tokens = getattr(agent, "tokens_used", 0) - reasoning_before
             record.change_summary = change_summary
