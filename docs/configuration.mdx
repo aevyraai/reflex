@@ -352,6 +352,10 @@ Pass strategy-specific parameters via `extra_kwargs`:
             "mutation_frequency": 5,
             "num_top_to_mutate": 2,
             "max_pool_size": 20,
+            # "auto" (default) learns which ranking method works best for
+            # this dataset over time via adaptive Dirichlet fusion.
+            # Other options: "fused", "copeland", "borda", "elo", "avg_winrate"
+            "ranking_method": "auto",
         },
     )
     ```
@@ -365,6 +369,7 @@ Pass strategy-specific parameters via `extra_kwargs`:
     | `mutation_frequency` | `5` | Mutate top prompts every N rounds |
     | `num_top_to_mutate` | `2` | How many top prompts to mutate |
     | `max_pool_size` | `20` | Maximum pool size before pruning |
+    | `ranking_method` | `"auto"` | How to rank the prompt pool each round. `"auto"` adaptively learns the best method; `"fused"` uses equal-weight fusion; `"copeland"`, `"borda"`, `"elo"`, `"avg_winrate"` use a single method explicitly |
   </Tab>
   <Tab title="Few-shot">
     ```python
