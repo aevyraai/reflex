@@ -432,6 +432,18 @@ proposing prompt rewrites, and deciding which strategy to apply. You can swap
 in any model with `--reasoning-model`:
 
 ```bash
+# Gemini 2.0 Flash — fast and cost-effective (GOOGLE_API_KEY)
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model gemini/gemini-2.0-flash \
+  -o best_prompt.md
+
+# Gemini 2.5 Pro — strongest Gemini reasoning model
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1 \
+  --reasoning-model gemini/gemini-2.5-pro \
+  -o best_prompt.md
+
 # Use Qwen3-8B locally via Ollama (good balance of reasoning + speed)
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.2:1b \
