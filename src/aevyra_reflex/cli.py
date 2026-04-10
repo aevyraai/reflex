@@ -120,6 +120,28 @@ def optimize(
         int,
         typer.Option("--max-workers", help="Max parallel threads for variant evals/duels. For Ollama, match to OLLAMA_NUM_PARALLEL."),
     ] = 4,
+    input_field: Annotated[
+        Optional[str],
+        typer.Option(
+            "--input-field",
+            help=(
+                "Field name to use as the user message when your JSONL doesn't match "
+                "a standard schema (OpenAI/ShareGPT/Alpaca). "
+                "Example: --input-field question"
+            ),
+        ),
+    ] = None,
+    output_field: Annotated[
+        Optional[str],
+        typer.Option(
+            "--output-field",
+            help=(
+                "Field name to use as the reference answer when your JSONL doesn't match "
+                "a standard schema. Omit for label-free datasets. "
+                "Example: --output-field answer"
+            ),
+        ),
+    ] = None,
     run_dir: Annotated[
         Optional[Path],
         typer.Option("--run-dir", help="Directory for run history. Defaults to .reflex/ in cwd."),
@@ -256,7 +278,7 @@ def optimize(
 
     # Load
     from aevyra_verdict import Dataset
-    ds = Dataset.from_jsonl(str(dataset))
+    ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
     initial_prompt = prompt.read_text().strip()
 
     # Resolve the score threshold.
