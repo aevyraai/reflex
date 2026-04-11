@@ -1056,6 +1056,7 @@ class PromptOptimizer:
         run_config = RunConfig(
             temperature=self.config.eval_temperature,
             max_tokens=self.config.max_tokens,
+            max_workers=self.config.max_workers,
         )
 
         runner = EvalRunner(config=run_config)

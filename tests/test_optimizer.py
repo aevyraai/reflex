@@ -522,3 +522,381 @@ class TestBranchedFromPassthrough(unittest.TestCase):
         run = self.store.get_latest_run()
         config = run.load_config()
         self.assertNotIn("branched_from", config)
+
+
+# ---------------------------------------------------------------------------
+# TestMaxWorkersRunConfig
+# ---------------------------------------------------------------------------
+
+class TestMaxWorkersRunConfig:
+    """max_workers from OptimizerConfig is propagated to verdict RunConfig."""
+
+    def _make_optimizer(self, max_workers=4):
+        from aevyra_verdict.dataset import Conversation, Message
+        from aevyra_verdict import Dataset, ExactMatch
+
+        conversations = [
+            Conversation(
+                messages=[Message(role="user", content="hi")],
+                ideal="hello",
+            )
+        ]
+        ds = Dataset(conversations=conversations)
+        config = OptimizerConfig(
+            max_iterations=1,
+            score_threshold=0.99,
+            val_ratio=0.0,
+            train_ratio=1.0,
+            max_workers=max_workers,
+        )
+        opt = PromptOptimizer(config=config)
+        opt.set_dataset(ds)
+        opt._providers = [{"provider_name": "openai", "model": "gpt-4o-mini", "label": "test"}]
+        opt._metrics = [ExactMatch()]
+        return opt
+
+    def test_max_workers_passed_to_run_config(self):
+        """RunConfig is constructed with max_workers matching OptimizerConfig."""
+        opt = self._make_optimizer(max_workers=8)
+
+        captured = {}
+
+        from aevyra_verdict.runner import RunConfig as _RealRunConfig
+
+        def fake_run_config(**kwargs):
+            captured.update(kwargs)
+            return _RealRunConfig(**kwargs)
+
+        with patch("aevyra_reflex.optimizer.RunConfig", side_effect=fake_run_config), \
+             patch("aevyra_reflex.optimizer.EvalRunner") as mock_runner:
+            mock_runner.return_value.run.return_value = MagicMock(model_results={})
+            opt._run_eval("You are helpful.")
+
+        assert "max_workers" in captured, "max_workers not passed to RunConfig"
+        assert captured["max_workers"] == 8
+
+    def test_max_workers_default_is_four(self):
+        """Default max_workers=4 is passed through."""
+        opt = self._make_optimizer(max_workers=4)
+
+        captured = {}
+
+        from aevyra_verdict.runner import RunConfig as _RealRunConfig
+
+        def fake_run_config(**kwargs):
+            captured.update(kwargs)
+            return _RealRunConfig(**kwargs)
+
+        with patch("aevyra_reflex.optimizer.RunConfig", side_effect=fake_run_config), \
+             patch("aevyra_reflex.optimizer.EvalRunner") as mock_runner:
+            mock_runner.return_value.run.return_value = MagicMock(model_results={})
+            opt._run_eval("You are helpful.")
+
+        assert captured.get("max_workers") == 4
+
+
+# ---------------------------------------------------------------------------
+# TestValSplitInRun
+# ---------------------------------------------------------------------------
+
+class TestValSplitInRun(unittest.TestCase):
+    """optimizer.run() correctly splits dataset into train/val/test."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = RunStore(root=Path(self.tmpdir) / ".reflex")
+
+    def _make_optimizer_with_dataset(self, n_conversations=20, val_ratio=0.1):
+        from aevyra_verdict.dataset import Conversation, Message
+        from aevyra_verdict import Dataset, ExactMatch
+
+        conversations = [
+            Conversation(
+                messages=[Message(role="user", content=f"item {i}")],
+                ideal=f"answer {i}",
+            )
+            for i in range(n_conversations)
+        ]
+        ds = Dataset(conversations=conversations)
+        config = OptimizerConfig(
+            max_iterations=1,
+            score_threshold=0.99,
+            val_ratio=val_ratio,
+            train_ratio=0.7,
+        )
+        opt = PromptOptimizer(config=config)
+        opt.set_dataset(ds)
+        opt._providers = [{"provider_name": "openai", "model": "gpt-4o-mini", "label": "test"}]
+        opt._metrics = [ExactMatch()]
+        return opt
+
+    def test_val_split_produces_three_datasets(self):
+        """With val_ratio=0.1, the run uses train/val/test (not just train/test)."""
+        opt = self._make_optimizer_with_dataset(n_conversations=20, val_ratio=0.1)
+
+        split_calls = []
+        real_split = opt._split_dataset_3way
+
+        def capturing_split(dataset, **kwargs):
+            result = real_split(dataset, **kwargs)
+            split_calls.append(result)
+            return result
+
+        fake_snap = EvalSnapshot(mean_score=0.5, scores_by_metric={})
+        fake_result = OptimizationResult(
+            best_prompt="improved", best_score=0.5,
+            iterations=[IterationRecord(iteration=1, system_prompt="improved", score=0.5)],
+            converged=False, baseline=fake_snap, final=fake_snap,
+        )
+        strategy_mock = MagicMock()
+        strategy_mock.run.return_value = fake_result
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock), \
+             patch.object(opt, "_split_dataset_3way", side_effect=capturing_split), \
+             patch.object(opt, "_run_eval", return_value=fake_snap):
+            opt.run("You are helpful.", run_store=self.store)
+
+        self.assertEqual(len(split_calls), 1, "3-way split should be called once")
+        train_ds, val_ds, test_ds = split_calls[0]
+        self.assertIsNotNone(val_ds, "val dataset should not be None")
+        self.assertGreater(len(train_ds.conversations), 0)
+        self.assertGreater(len(val_ds.conversations), 0)
+        self.assertGreater(len(test_ds.conversations), 0)
+        # Approximate split ratios
+        total = len(train_ds.conversations) + len(val_ds.conversations) + len(test_ds.conversations)
+        self.assertEqual(total, 20)
+
+    def test_val_split_disabled_produces_two_datasets(self):
+        """With val_ratio=0.0, only train/test split is used."""
+        opt = self._make_optimizer_with_dataset(n_conversations=20, val_ratio=0.0)
+
+        split_calls = []
+        real_split = opt._split_dataset
+
+        def capturing_split(dataset, *args, **kwargs):
+            result = real_split(dataset, *args, **kwargs)
+            split_calls.append(result)
+            return result
+
+        fake_snap = EvalSnapshot(mean_score=0.5, scores_by_metric={})
+        fake_result = OptimizationResult(
+            best_prompt="improved", best_score=0.5,
+            iterations=[IterationRecord(iteration=1, system_prompt="improved", score=0.5)],
+            converged=False, baseline=fake_snap, final=fake_snap,
+        )
+        strategy_mock = MagicMock()
+        strategy_mock.run.return_value = fake_result
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock), \
+             patch.object(opt, "_split_dataset", side_effect=capturing_split), \
+             patch.object(opt, "_run_eval", return_value=fake_snap):
+            opt.run("You are helpful.", run_store=self.store)
+
+        self.assertEqual(len(split_calls), 1, "2-way split should be called once")
+        train_ds, test_ds = split_calls[0]
+        total = len(train_ds.conversations) + len(test_ds.conversations)
+        self.assertEqual(total, 20)
+
+
+# ---------------------------------------------------------------------------
+# TestConvergenceBasedOnTestScore
+# ---------------------------------------------------------------------------
+
+class TestConvergenceBasedOnTestScore(unittest.TestCase):
+    """result.converged reflects the held-out test score, not the training score."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = RunStore(root=Path(self.tmpdir) / ".reflex")
+
+    def _run_with_scores(self, baseline_score, final_score, threshold):
+        from aevyra_verdict.dataset import Conversation, Message
+        from aevyra_verdict import Dataset, ExactMatch
+
+        conversations = [
+            Conversation(
+                messages=[Message(role="user", content="q")],
+                ideal="a",
+            )
+        ]
+        ds = Dataset(conversations=conversations)
+        config = OptimizerConfig(
+            max_iterations=1,
+            score_threshold=threshold,
+            val_ratio=0.0,
+            train_ratio=1.0,
+        )
+        opt = PromptOptimizer(config=config)
+        opt.set_dataset(ds)
+        opt._providers = [{"provider_name": "openai", "model": "gpt-4o-mini", "label": "test"}]
+        opt._metrics = [ExactMatch()]
+
+        baseline_snap = EvalSnapshot(mean_score=baseline_score, scores_by_metric={})
+        final_snap = EvalSnapshot(mean_score=final_score, scores_by_metric={})
+        fake_result = OptimizationResult(
+            best_prompt="improved", best_score=final_score,
+            iterations=[IterationRecord(iteration=1, system_prompt="improved", score=final_score)],
+            converged=False, baseline=baseline_snap, final=final_snap,
+        )
+        strategy_mock = MagicMock()
+        strategy_mock.run.return_value = fake_result
+
+        eval_calls = []
+
+        def fake_run_eval(prompt, dataset=None):
+            snap = final_snap if eval_calls else baseline_snap
+            eval_calls.append(prompt)
+            return snap
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock), \
+             patch.object(opt, "_run_eval", side_effect=fake_run_eval):
+            return opt.run("You are helpful.", run_store=self.store)
+
+    def test_converged_true_when_final_score_meets_threshold(self):
+        """converged=True when final test score >= score_threshold."""
+        result = self._run_with_scores(
+            baseline_score=0.5,
+            final_score=0.9,
+            threshold=0.85,
+        )
+        self.assertTrue(result.converged)
+
+    def test_converged_false_when_final_score_below_threshold(self):
+        """converged=False when final test score < score_threshold."""
+        result = self._run_with_scores(
+            baseline_score=0.5,
+            final_score=0.7,
+            threshold=0.85,
+        )
+        self.assertFalse(result.converged)
+
+    def test_converged_false_when_baseline_meets_threshold_but_final_does_not(self):
+        """converged is based on final test score, not training score."""
+        result = self._run_with_scores(
+            baseline_score=0.9,  # baseline exceeds threshold
+            final_score=0.7,     # but final (test) does not
+            threshold=0.85,
+        )
+        self.assertFalse(result.converged)
+
+
+# ---------------------------------------------------------------------------
+# TestResumeSkipsBaseline
+# ---------------------------------------------------------------------------
+
+class TestResumeSkipsBaseline(unittest.TestCase):
+    """optimizer.run() with resume_run reuses saved baseline and skips re-evaluation."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = RunStore(root=Path(self.tmpdir) / ".reflex")
+
+    def test_resume_skips_baseline_eval(self):
+        """When resuming, baseline eval is not called again."""
+        from aevyra_verdict.dataset import Conversation, Message
+        from aevyra_verdict import Dataset, ExactMatch
+        from aevyra_reflex.run_store import CheckpointState
+
+        conversations = [
+            Conversation(messages=[Message(role="user", content="q")], ideal="a")
+        ]
+        ds = Dataset(conversations=conversations)
+        config = OptimizerConfig(
+            max_iterations=1,
+            score_threshold=0.99,
+            val_ratio=0.0,
+            train_ratio=1.0,
+        )
+        opt = PromptOptimizer(config=config)
+        opt.set_dataset(ds)
+        opt._providers = [{"provider_name": "openai", "model": "gpt-4o-mini", "label": "test"}]
+        opt._metrics = [ExactMatch()]
+
+        # Create a run with a saved checkpoint containing a baseline
+        run = self.store.create_run(
+            config={}, dataset_path="", prompt_path="", initial_prompt="initial"
+        )
+        checkpoint = CheckpointState(
+            run_id=run.run_id,
+            initial_prompt="initial",
+            current_prompt="improved v1",
+            completed_iterations=1,
+            best_prompt="improved v1",
+            best_score=0.6,
+            baseline={"mean_score": 0.4, "scores_by_metric": {}},
+        )
+        run.save_checkpoint(checkpoint)
+
+        fake_snap = EvalSnapshot(mean_score=0.65, scores_by_metric={})
+        fake_result = OptimizationResult(
+            best_prompt="improved v2", best_score=0.65,
+            iterations=[IterationRecord(iteration=2, system_prompt="improved v2", score=0.65)],
+            converged=False, baseline=fake_snap, final=fake_snap,
+        )
+        strategy_mock = MagicMock()
+        strategy_mock.run.return_value = fake_result
+
+        eval_calls = []
+
+        def fake_run_eval(prompt, dataset=None):
+            eval_calls.append(prompt)
+            return fake_snap
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock), \
+             patch.object(opt, "_run_eval", side_effect=fake_run_eval):
+            opt.run("initial", run_store=self.store, resume_run=run)
+
+        # Only the final verification eval should fire, not a fresh baseline
+        self.assertEqual(len(eval_calls), 1, "Baseline eval should be skipped on resume")
+
+    def test_resume_uses_saved_baseline_score(self):
+        """Resumed run uses the checkpoint baseline score, not a fresh eval."""
+        from aevyra_verdict.dataset import Conversation, Message
+        from aevyra_verdict import Dataset, ExactMatch
+        from aevyra_reflex.run_store import CheckpointState
+
+        conversations = [
+            Conversation(messages=[Message(role="user", content="q")], ideal="a")
+        ]
+        ds = Dataset(conversations=conversations)
+        opt = PromptOptimizer(config=OptimizerConfig(
+            max_iterations=1, score_threshold=0.99, val_ratio=0.0, train_ratio=1.0
+        ))
+        opt.set_dataset(ds)
+        opt._providers = [{"provider_name": "openai", "model": "gpt-4o-mini", "label": "test"}]
+        opt._metrics = [ExactMatch()]
+
+        saved_baseline_score = 0.42
+        run = self.store.create_run(
+            config={}, dataset_path="", prompt_path="", initial_prompt="initial"
+        )
+        checkpoint = CheckpointState(
+            run_id=run.run_id,
+            initial_prompt="initial",
+            current_prompt="improved",
+            completed_iterations=1,
+            best_prompt="improved",
+            best_score=0.7,
+            baseline={"mean_score": saved_baseline_score, "scores_by_metric": {}},
+        )
+        run.save_checkpoint(checkpoint)
+
+        fake_snap = EvalSnapshot(mean_score=0.7, scores_by_metric={})
+        fake_result = OptimizationResult(
+            best_prompt="improved", best_score=0.7,
+            iterations=[IterationRecord(iteration=2, system_prompt="improved", score=0.7)],
+            converged=False, baseline=fake_snap, final=fake_snap,
+        )
+        strategy_mock = MagicMock()
+        strategy_mock.run.return_value = fake_result
+
+        with patch("aevyra_reflex.optimizer.LLM"), \
+             patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: strategy_mock), \
+             patch.object(opt, "_run_eval", return_value=fake_snap):
+            result = opt.run("initial", run_store=self.store, resume_run=run)
+
+        self.assertAlmostEqual(result.baseline.mean_score, saved_baseline_score)
