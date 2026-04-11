@@ -86,7 +86,7 @@ config = OptimizerConfig(
 
 ```python
 config = OptimizerConfig(
-    reasoning_model="llama3:70b",
+    reasoning_model="llama3.3:70b",
     reasoning_provider="ollama",   # or set base_url to your Ollama server
 )
 ```
@@ -154,7 +154,7 @@ optimizer = (
 optimizer = (
     PromptOptimizer()
     .set_dataset("data.csv")
-    .add_provider("ollama", "llama3:8b")
+    .add_provider("ollama", "llama3.1:8b")
     .add_metric(RougeScore())
 )
 ```

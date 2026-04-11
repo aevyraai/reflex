@@ -427,19 +427,9 @@ For **Ollama**, you need to explicitly enable parallel inference — by default
 Ollama processes one request at a time:
 
 ```bash
-# Option 1: Start Ollama from the terminal with parallel inference
-OLLAMA_NUM_PARALLEL=4 ollama serve
-
-# Option 2: If using the macOS app, set the env var system-wide
-launchctl setenv OLLAMA_NUM_PARALLEL 4
-# Then restart the Ollama app
-```
-
-Then tell reflex to use matching parallelism:
-
-```bash
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.2:8b \
+OLLAMA_NUM_PARALLEL=4 ollama serve &
+OLLAMA_NUM_PARALLEL=4 aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m local/llama3.1:8b \
   --max-workers 4
 ```
 
@@ -471,13 +461,13 @@ A more capable reasoning model produces better prompt rewrites.
     ```bash
     aevyra-reflex optimize dataset.jsonl prompt.md \
       -m local/llama3.2:1b \
-      --reasoning-model ollama/llama3.1:70b
+      --reasoning-model ollama/llama3.3:70b
     ```
 
     Python API:
     ```python
     config = OptimizerConfig(
-        reasoning_model="llama3.1:70b",
+        reasoning_model="llama3.3:70b",
         reasoning_provider="ollama",
     )
     ```

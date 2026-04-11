@@ -246,8 +246,8 @@ whichever improves the score.
 For **Ollama**, enable parallel inference first:
 
 ```bash
-OLLAMA_NUM_PARALLEL=4 ollama serve
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.2:8b --max-workers 4
+OLLAMA_NUM_PARALLEL=4 ollama serve &
+OLLAMA_NUM_PARALLEL=4 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --max-workers 4
 ```
 
 If `OLLAMA_NUM_PARALLEL` is not set, reflex auto-detects and falls back to
