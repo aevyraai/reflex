@@ -567,8 +567,8 @@ class TestMaxWorkersRunConfig:
             captured.update(kwargs)
             return _RealRunConfig(**kwargs)
 
-        with patch("aevyra_reflex.optimizer.RunConfig", side_effect=fake_run_config), \
-             patch("aevyra_reflex.optimizer.EvalRunner") as mock_runner:
+        with patch("aevyra_verdict.runner.RunConfig", side_effect=fake_run_config), \
+             patch("aevyra_verdict.EvalRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(model_results={})
             opt._run_eval("You are helpful.")
 
@@ -587,8 +587,8 @@ class TestMaxWorkersRunConfig:
             captured.update(kwargs)
             return _RealRunConfig(**kwargs)
 
-        with patch("aevyra_reflex.optimizer.RunConfig", side_effect=fake_run_config), \
-             patch("aevyra_reflex.optimizer.EvalRunner") as mock_runner:
+        with patch("aevyra_verdict.runner.RunConfig", side_effect=fake_run_config), \
+             patch("aevyra_verdict.EvalRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(model_results={})
             opt._run_eval("You are helpful.")
 
