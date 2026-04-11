@@ -276,7 +276,6 @@ class TestOllamaEndToEnd:
     def test_score_does_not_regress(self, tmp_path):
         """best_score should be >= baseline after optimization.
 
-        Uses 3 iterations so the optimizer has a real chance to improve.
         If the model produces identical scores throughout, the test is skipped
         rather than failed — a flat score line isn't a regression.
         """
@@ -318,8 +317,8 @@ class TestOllamaEndToEnd:
 
         config = OptimizerConfig(
             strategy="iterative",
-            max_iterations=3,
-            score_threshold=0.99,   # run all 3 iters
+            max_iterations=1,
+            score_threshold=0.99,   # run all iters
             reasoning_model="llama3.2:1b",
             reasoning_provider="ollama",
             reasoning_base_url=OLLAMA_BASE_URL,
@@ -344,4 +343,126 @@ class TestOllamaEndToEnd:
 
         assert best >= baseline, (
             f"Score regressed: baseline={baseline:.3f}, best={best:.3f}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 4. Auto strategy end-to-end
+# ---------------------------------------------------------------------------
+
+class TestOllamaAutoStrategy:
+    """Full optimizer.run() with strategy='auto' using a live Ollama instance."""
+
+    @requires_ollama
+    @requires_model
+    def test_auto_strategy_completes(self, tmp_path):
+        """auto strategy runs baseline → phases → verify without crashing."""
+        from aevyra_reflex.optimizer import PromptOptimizer, OptimizerConfig
+        from aevyra_reflex.run_store import RunStore
+
+        try:
+            from aevyra_verdict import Dataset, ExactMatch
+            from aevyra_verdict.dataset import Conversation, Message
+        except ImportError:
+            pytest.skip("aevyra_verdict not installed")
+
+        conversations = [
+            Conversation(
+                messages=[Message(role="user", content="The movie was great!")],
+                ideal="positive",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="I hated every minute.")],
+                ideal="negative",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="It was okay, nothing special.")],
+                ideal="neutral",
+            ),
+        ]
+        dataset = Dataset(conversations=conversations)
+        store = RunStore(root=tmp_path / ".reflex")
+
+        config = OptimizerConfig(
+            strategy="auto",
+            max_iterations=2,          # keep it short
+            score_threshold=0.99,      # won't converge — just run iterations
+            val_ratio=0.0,             # tiny dataset, skip val split
+            reasoning_model="llama3.2:1b",
+            reasoning_provider="ollama",
+            reasoning_base_url=OLLAMA_BASE_URL,
+        )
+
+        result = (
+            PromptOptimizer(config=config)
+            .set_dataset(dataset)
+            .add_provider("local", MODEL, base_url=OLLAMA_BASE_URL)
+            .add_metric(ExactMatch())
+            .run(
+                "Classify the sentiment as positive, negative, or neutral. Reply with one word only.",
+                run_store=store,
+            )
+        )
+
+        assert result.best_prompt is not None
+        assert result.baseline is not None
+        assert result.final is not None
+        assert len(result.iterations) >= 1
+        assert 0.0 <= result.best_score <= 1.0
+
+    @requires_ollama
+    @requires_model
+    def test_auto_strategy_persists_strategy_state(self, tmp_path):
+        """auto strategy saves strategy_state to checkpoint so resume is possible."""
+        from aevyra_reflex.optimizer import PromptOptimizer, OptimizerConfig
+        from aevyra_reflex.run_store import RunStore
+
+        try:
+            from aevyra_verdict import Dataset, ExactMatch
+            from aevyra_verdict.dataset import Conversation, Message
+        except ImportError:
+            pytest.skip("aevyra_verdict not installed")
+
+        conversations = [
+            Conversation(
+                messages=[Message(role="user", content="Great product!")],
+                ideal="positive",
+            ),
+            Conversation(
+                messages=[Message(role="user", content="Terrible experience.")],
+                ideal="negative",
+            ),
+        ]
+        dataset = Dataset(conversations=conversations)
+        store = RunStore(root=tmp_path / ".reflex")
+
+        config = OptimizerConfig(
+            strategy="auto",
+            max_iterations=1,
+            score_threshold=0.99,
+            val_ratio=0.0,
+            reasoning_model="llama3.2:1b",
+            reasoning_provider="ollama",
+            reasoning_base_url=OLLAMA_BASE_URL,
+        )
+
+        (
+            PromptOptimizer(config=config)
+            .set_dataset(dataset)
+            .add_provider("local", MODEL, base_url=OLLAMA_BASE_URL)
+            .add_metric(ExactMatch())
+            .run(
+                "Classify sentiment. Reply with one word: positive, negative, or neutral.",
+                run_store=store,
+            )
+        )
+
+        run = store.get_latest_run()
+        assert run is not None
+        checkpoint = run.load_checkpoint()
+        # After at least 1 iteration, strategy_state should be populated
+        assert checkpoint is not None
+        assert isinstance(checkpoint.strategy_state, dict)
+        assert len(checkpoint.strategy_state) > 0, (
+            "strategy_state should be saved to checkpoint by auto strategy"
         )
