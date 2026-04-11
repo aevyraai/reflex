@@ -541,6 +541,7 @@ class PromptOptimizer:
         run_config = RunConfig(
             temperature=self.config.eval_temperature,
             max_tokens=self.config.max_tokens,
+            max_workers=self.config.max_workers,
         )
 
         runner = EvalRunner(config=run_config)
@@ -995,10 +996,10 @@ class PromptOptimizer:
                 "Ollama detected with %s strategy, but OLLAMA_NUM_PARALLEL "
                 "is not set. Ollama defaults to processing 1 request at a "
                 "time, so parallel variant evaluation won't speed things up. "
-                "To enable parallel inference, restart Ollama with:\n"
-                "  OLLAMA_NUM_PARALLEL=4 ollama serve\n"
-                "Then set max_workers to match:\n"
-                "  aevyra-reflex optimize ... --max-workers 4",
+                "To enable parallel inference, set the env var for both "
+                "Ollama and reflex:\n"
+                "  OLLAMA_NUM_PARALLEL=4 ollama serve &\n"
+                "  OLLAMA_NUM_PARALLEL=4 aevyra-reflex optimize ... --max-workers 4",
                 self.config.strategy,
             )
             # Fall back to sequential to avoid pointless thread overhead
@@ -1056,6 +1057,7 @@ class PromptOptimizer:
         run_config = RunConfig(
             temperature=self.config.eval_temperature,
             max_tokens=self.config.max_tokens,
+            max_workers=self.config.max_workers,
         )
 
         runner = EvalRunner(config=run_config)
