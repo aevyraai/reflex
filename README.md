@@ -5,8 +5,11 @@
 Agentic prompt optimization built for production workloads. Reflex takes your dataset and
 prompt, runs evals, diagnoses why scores are falling short, and rewrites the prompt — iterating
 until it converges. Runs can be interrupted and resumed at any point without losing work, and
-every token spent is tracked across sessions so you always know the cost. Works for improving
-an existing prompt, migrating one to a new model, or closing the gap to your best model's score.
+every token spent is tracked across sessions so you always know the cost. Every rewrite is
+accompanied by a reasoned explanation of what changed and why — prompt diffs, score
+attributions, and the full reasoning trace are persisted as a durable audit trail. Works for
+improving an existing prompt, migrating one to a new model, or closing the gap to your best
+model's score.
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
