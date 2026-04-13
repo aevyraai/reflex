@@ -91,6 +91,21 @@ class TestResolveProvider:
         r = _resolve_provider("openrouter", "test-model", api_key="custom-key")
         assert r["api_key"] == "custom-key"
 
+    def test_alias_missing_key_raises_clear_error(self, monkeypatch):
+        """Regression: missing key for aliased providers (together, groq, etc.)
+        must raise a clear ValueError naming the right env var, not silently pass
+        None through to OpenAIProvider which then raises a confusing OPENAI_API_KEY error."""
+        monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="TOGETHER_API_KEY"):
+            _resolve_provider("together", "meta-llama/Llama-3.1-8B-Instruct")
+
+    def test_alias_missing_key_groq(self, monkeypatch):
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        with pytest.raises(ValueError, match="GROQ_API_KEY"):
+            _resolve_provider("groq", "llama-3.1-8b-instant")
+
     def test_unknown_alias_passes_through(self):
         r = _resolve_provider("some_new_provider", "some-model")
         assert r["provider_name"] == "some_new_provider"

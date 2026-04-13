@@ -163,11 +163,12 @@ def _resolve_provider(
     alias = PROVIDER_ALIASES.get(provider_name)
     if alias:
         resolved_base_url = base_url or alias["base_url"]
-        resolved_api_key = api_key or os.environ.get(alias["env_key"]) or os.environ.get("OPENAI_API_KEY")
+        resolved_api_key = api_key or os.environ.get(alias["env_key"])
         if not resolved_api_key:
-            logger.warning(
+            raise ValueError(
                 f"No API key found for {provider_name}. "
-                f"Set {alias['env_key']} or OPENAI_API_KEY."
+                f"Set the {alias['env_key']} environment variable "
+                f"or pass api_key= directly."
             )
         return {
             "provider_name": "openai",
