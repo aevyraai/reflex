@@ -1,0 +1,214 @@
+---
+title: Explainability & auditability
+description: Every decision reflex makes is recorded, reasoned, and queryable — so you can understand, audit, and reproduce any optimization run.
+---
+
+Prompt optimization is not a black box in reflex. Every rewrite is accompanied
+by a structured rationale, every score delta is attributed to a specific change,
+and the full history of an optimization run is persisted to disk in a
+human-readable format. This page covers what is recorded, where it lives, and
+how to use it in production and compliance workflows.
+
+---
+
+## What gets recorded per iteration
+
+For every iteration, reflex saves:
+
+| Field | Description |
+|---|---|
+| `iteration` | Iteration number |
+| `system_prompt` | The exact prompt used |
+| `score` | Train score for this iteration |
+| `val_score` | Validation score (when val split is active) |
+| `scores_by_metric` | Per-metric breakdown (rouge, bleu, judge, etc.) |
+| `reasoning` | The reasoning model's full explanation of what it changed and why |
+| `change_summary` | A one-line human-readable summary of the change (e.g. "Added numbered reasoning steps and explicit output constraints") |
+| `eval_tokens` | Tokens consumed by the target model and eval scoring this iteration |
+| `reasoning_tokens` | Tokens consumed by the reasoning model |
+| `elapsed_seconds` | Cumulative wall time from run start at the point this iteration completed |
+| `timestamp` | ISO 8601 timestamp |
+
+Everything is written to `.reflex/runs/<run_id>/iterations/` as individual
+JSON files — one per iteration — and is never overwritten.
+
+---
+
+## The causal rewrite log
+
+The iterative and auto strategies maintain a **causal rewrite log** — a
+compact, structured record of every change made across iterations and its
+observed effect:
+
+```
+Rewrite history:
+Iter 1 (score: 0.6234, Δ+0.0871 — ✓ helped): Added numbered reasoning steps and explicit output constraints
+Iter 2 (score: 0.7105, Δ+0.0029 — ✗ no effect): Added "think step by step" instruction
+Iter 3 (score: 0.6980, Δ-0.0125 — ✗ hurt): Switched to XML tag structure
+Iter 4 (score: 0.7450, Δ+0.0345 — ✓ helped): Reverted XML, added few-shot format example
+```
+
+This log is injected back into the reasoning model on each subsequent
+iteration. It acts as institutional memory — the model knows which approaches
+have already been tried, which worked, and which didn't, so it doesn't
+repeat failed directions.
+
+The log is also persisted: the `reasoning` field of each `IterationState`
+contains the full rationale that produced that iteration's prompt, including
+the rewrite history that was visible at the time. This means you can
+reconstruct the exact reasoning chain that led to any prompt.
+
+---
+
+## The run artifact
+
+Every run produces a structured directory under `.reflex/runs/`:
+
+```
+.reflex/runs/
+└── 043_2026-04-13T09-11-57/
+    ├── config.json          # Full optimizer config: strategy, model, metrics, thresholds
+    ├── baseline.json        # Baseline eval scores on the held-out test set
+    ├── checkpoint.json      # Latest resumable state (strategy phase, best prompt, etc.)
+    ├── result.json          # Final outcome: best prompt, scores, trajectory, duration
+    ├── iterations/
+    │   ├── iter_001.json    # Per-iteration record (see fields above)
+    │   ├── iter_002.json
+    │   └── ...
+    └── best_prompt.md       # The winning prompt in plaintext
+```
+
+`result.json` and all iteration files are append-only. They are never
+modified after being written, making them suitable as audit trail artifacts.
+
+### Reading programmatically
+
+```python
+from aevyra_reflex.run_store import RunStore
+
+store = RunStore(".reflex/runs")
+run = store.get_run("043")
+
+# Full result
+result = run.load_result()
+print(result["best_score"])
+print(result["duration_seconds"])
+
+# Per-iteration records
+for it in run.load_iterations():
+    print(f"Iter {it.iteration}: score={it.score:.4f}  reasoning={it.reasoning[:80]}...")
+
+# Config snapshot (what settings produced this run)
+config = run.load_config()
+print(config["optimizer_config"]["strategy"])
+print(config["optimizer_config"]["metrics"])
+```
+
+---
+
+## Prompt diffs
+
+Every iteration's prompt is stored in full. Reflex computes diffs
+between consecutive iterations on demand — in the dashboard as a
+line-level colored diff, and programmatically:
+
+```python
+import difflib
+
+iters = list(run.load_iterations())
+for prev, curr in zip(iters, iters[1:]):
+    diff = list(difflib.unified_diff(
+        prev.system_prompt.splitlines(),
+        curr.system_prompt.splitlines(),
+        lineterm="",
+        n=2,
+    ))
+    print(f"\n--- Iter {prev.iteration} → {curr.iteration} ---")
+    for line in diff[2:]:   # skip the +++ / --- header lines
+        print(line)
+```
+
+This makes it straightforward to produce a human-readable change log for
+any run — useful for documenting what was attempted, in what order, and
+what each change contributed.
+
+---
+
+## Reproducibility
+
+A run can be reproduced by re-running with the same config:
+
+```bash
+# The config snapshot is in config.json — read it back out
+aevyra-reflex optimize dataset.jsonl <initial_prompt> \
+  --strategy auto \
+  --max-iterations 10 \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --reasoning-model claude-sonnet-4-20250514
+```
+
+For exact reproducibility (same outputs from the target model), set
+`eval_temperature=0` (the default). Reasoning model outputs are
+non-deterministic even at temperature 0 for most providers.
+
+The `config.json` artifact records every setting that influenced the run,
+including the reasoning model, target model, strategy, thresholds, dataset
+path, metrics, and train/val/test split ratios. This is sufficient to
+reconstruct the conditions of any run.
+
+---
+
+## Using reflex as part of a compliance workflow
+
+### What reflex can provide
+
+- **Durable artifacts** — all run outputs are written to disk and never
+  modified, providing a tamper-evident record of the optimization process
+- **Reasoning traces** — every prompt revision includes the reasoning model's
+  explanation of what it changed and why, attributing each score delta to a
+  specific design decision
+- **Score accountability** — baseline and final scores are computed on a
+  held-out test set, separate from the training set used during optimization,
+  reducing the risk of overfitting being mistaken for genuine improvement
+- **Statistical significance** — reflex runs a paired Wilcoxon/t-test and
+  reports whether the improvement is statistically significant at α=0.05,
+  flagging when a score gain may be noise
+- **Token accounting** — full token usage is recorded per iteration and
+  summarized in the final result, supporting cost attribution
+
+### What reflex cannot provide
+
+- **Model behavior guarantees** — scores reflect performance on your specific
+  evaluation dataset; reflex cannot guarantee the optimized prompt generalizes
+  to all inputs
+- **Deterministic reasoning** — the reasoning model's choices (which edits to
+  make, which strategy to pursue) are not deterministic and will differ across
+  runs even with the same config
+- **Human review** — reflex automates the iteration loop but does not replace
+  human judgment about whether the optimized prompt is appropriate for
+  deployment
+
+For high-stakes deployments, treat the reflex output as a starting point for
+human review rather than a final artifact. The reasoning traces and prompt
+diffs are designed to make that review fast and concrete.
+
+---
+
+## What the dashboard shows
+
+The dashboard provides a visual audit trail of any run:
+
+- **Flow graph** — each iteration as a node with its score, score delta,
+  and token usage
+- **Iteration detail** — click any node to see the full prompt (with diff
+  against the previous version), the reasoning model's explanation, and
+  per-metric scores
+- **Phase breakdown** (auto strategy) — which optimization axis ran in
+  each phase and what it contributed
+- **Token summary** — total eval and reasoning token costs for the run
+- **Duration** — total wall time per iteration and for the full run
+
+```bash
+aevyra-reflex dashboard
+# → http://localhost:8128
+```
