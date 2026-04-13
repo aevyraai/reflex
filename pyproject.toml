@@ -39,12 +39,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-openai   = ["openai>=1.0",       "aevyra-verdict[openai]>=0.1.0"]
+openai   = ["openai>=2.31.0",       "aevyra-verdict[openai]>=0.1.0"]
 google   = ["google-genai>=1.0", "aevyra-verdict[google]>=0.1.0"]
 mistral  = ["mistralai>=1.0",    "aevyra-verdict[mistral]>=0.1.0"]
 cohere   = ["cohere>=5.0",       "aevyra-verdict[cohere]>=0.1.0"]
 all      = [
-    "openai>=1.0",
+    "openai>=2.31.0",
     "google-genai>=1.0",
     "mistralai>=1.0",
     "cohere>=5.0",
