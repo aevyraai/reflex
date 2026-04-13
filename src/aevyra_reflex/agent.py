@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,27 @@ class _AnthropicBackend:
         return self._client
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        from anthropic import OverloadedError, RateLimitError
+
+        delays = [5, 10, 20, 40, 60]
+        for attempt, delay in enumerate(delays + [None]):
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                break
+            except (OverloadedError, RateLimitError) as exc:
+                if delay is None:
+                    raise
+                logger.warning(
+                    "Reasoning model %s (attempt %d/%d): %s — retrying in %ds",
+                    self.model, attempt + 1, len(delays), exc.__class__.__name__, delay,
+                )
+                time.sleep(delay)
+
         if hasattr(response, "usage") and response.usage:
             self.tokens_used = getattr(self, "tokens_used", 0) + (
                 response.usage.input_tokens + response.usage.output_tokens
@@ -113,12 +129,27 @@ class _OpenAIBackend:
         return self._client
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        from openai import APIStatusError
+
+        delays = [5, 10, 20, 40, 60]
+        for attempt, delay in enumerate(delays + [None]):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                break
+            except APIStatusError as exc:
+                if exc.status_code not in (429, 529) or delay is None:
+                    raise
+                logger.warning(
+                    "Reasoning model %s (attempt %d/%d): HTTP %d — retrying in %ds",
+                    self.model, attempt + 1, len(delays), exc.status_code, delay,
+                )
+                time.sleep(delay)
+
         if response.usage:
             self.tokens_used = getattr(self, "tokens_used", 0) + (
                 response.usage.prompt_tokens + response.usage.completion_tokens
