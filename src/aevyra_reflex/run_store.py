@@ -101,6 +101,11 @@ class CheckpointState:
     best_val_score: float = -1.0
     best_val_iter: int = 0
 
+    # Cumulative wall-clock time across all sessions (seconds).
+    # Each session adds its elapsed time when writing the final result so
+    # multi-session runs show total wall time rather than just the last session.
+    accumulated_duration_seconds: float = 0.0
+
     timestamp: str = ""
 
 

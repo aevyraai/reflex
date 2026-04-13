@@ -40,6 +40,7 @@ on, and few-shot examples are added on top of both.
 from __future__ import annotations
 
 import logging
+import time as _time
 from dataclasses import dataclass
 from typing import Any
 
@@ -264,6 +265,7 @@ class AutoStrategy(Strategy):
             # bootstrap, PDO can restore its pool, etc.
             sub_resume_state = _sub_state_box[0] if _sub_state_box[0] else None
 
+            _phase_start = _time.monotonic()
             sub_result = sub_strategy.run(
                 initial_prompt=current_prompt,
                 dataset=dataset,
@@ -275,6 +277,7 @@ class AutoStrategy(Strategy):
                 resume_state=sub_resume_state,
                 update_strategy_state=_sub_update_strategy_state,
             )
+            _phase_duration = _time.monotonic() - _phase_start
 
             # If sub-strategy didn't report via callback, absorb its iterations
             if not any(r.reasoning.startswith(f"[{axis}]") for r in all_iterations):
@@ -312,6 +315,7 @@ class AutoStrategy(Strategy):
                 "score_after": sub_result.best_score,
                 "improvement": sub_result.best_score - last_phase_score,
                 "converged": sub_result.converged,
+                "duration_seconds": round(_phase_duration, 1),
             })
             last_phase_score = sub_result.best_score
             current_prompt = sub_result.best_prompt
@@ -340,10 +344,13 @@ class AutoStrategy(Strategy):
                     state["_reset_val_history"] = True
                 update_strategy_state(state)
 
+            _dur_m, _dur_s = divmod(int(_phase_duration), 60)
+            _dur_label = f"{_dur_m}m {_dur_s}s" if _dur_m else f"{_dur_s}s"
             logger.info(
                 f"  Phase {phase_idx + 1} ({axis}) done: "
                 f"score={sub_result.best_score:.4f}, "
-                f"converged={sub_result.converged}"
+                f"converged={sub_result.converged}, "
+                f"duration={_dur_label}"
             )
 
             # ----------------------------------------------------------

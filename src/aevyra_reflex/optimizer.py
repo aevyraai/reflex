@@ -715,11 +715,14 @@ class PromptOptimizer:
 
         run: Run | None = None
         checkpoint: CheckpointState | None = None
+        # Cumulative wall time from prior sessions (0 for fresh runs).
+        _prior_duration_seconds: float = 0.0
 
         if resume_run is not None:
             run = resume_run
             checkpoint = run.load_checkpoint()
             if checkpoint:
+                _prior_duration_seconds = checkpoint.accumulated_duration_seconds
                 logger.info(
                     f"Resuming run {run.run_id} from iteration "
                     f"{checkpoint.completed_iterations} "
@@ -802,6 +805,7 @@ class PromptOptimizer:
                     "scores_by_metric": baseline.scores_by_metric,
                     "total_tokens": baseline.total_tokens,
                 },
+                accumulated_duration_seconds=_prior_duration_seconds,
             ))
 
         # --- Step 2: Optimization loop ---
@@ -915,6 +919,7 @@ class PromptOptimizer:
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
                     best_val_iter=_es["best_val_iter"],
+                    accumulated_duration_seconds=_prior_duration_seconds + _time.monotonic() - _run_start_monotonic,
                 ))
 
             # --- Validation eval + early stopping ---
@@ -1030,6 +1035,7 @@ class PromptOptimizer:
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
                     best_val_iter=_es["best_val_iter"],
+                    accumulated_duration_seconds=_prior_duration_seconds + _time.monotonic() - _run_start_monotonic,
                 ))
 
         _early_stopped = False
@@ -1136,10 +1142,18 @@ class PromptOptimizer:
         # Save final result
         if run:
             result_dict = result.to_dict()
-            result_dict["duration_seconds"] = round(_time.monotonic() - _run_start_monotonic, 2)
+            _total_seconds = _prior_duration_seconds + _time.monotonic() - _run_start_monotonic
+            result_dict["duration_seconds"] = round(_total_seconds, 2)
             result_dict["started_at"] = _run_started_at
             run.save_result(result_dict)
-            logger.info(f"Run {run.run_id} saved to {run.run_dir}")
+            _dur_m, _dur_s = divmod(int(_total_seconds), 60)
+            _dur_h, _dur_m = divmod(_dur_m, 60)
+            _dur_label = (
+                f"{_dur_h}h {_dur_m}m {_dur_s}s" if _dur_h
+                else f"{_dur_m}m {_dur_s}s" if _dur_m
+                else f"{_dur_s}s"
+            )
+            logger.info(f"Run {run.run_id} saved to {run.run_dir}  (total duration: {_dur_label})")
 
         # Fire on_run_end
         for cb in _callbacks:
