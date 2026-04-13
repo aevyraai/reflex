@@ -246,20 +246,25 @@ class OptimizerConfig:
     samples_per_duel, initial_pool_size, thompson_alpha, mutation_frequency,
     num_top_to_mutate, max_pool_size."""
 
-    train_ratio: float = 0.8
+    train_ratio: float = 0.65
     """Fraction of the dataset used during optimization. The remaining examples
     are held out as a test set and used exclusively for baseline and final eval.
     Set to 1.0 to use the full dataset for everything (no split).
-    Default: 0.8 (80% train / 20% test)."""
+    Default: 0.65 (65% train+val / 35% test).
 
-    val_ratio: float = 0.1
+    A larger test set is preferred over a larger training set because the test
+    set determines statistical significance: ~30 held-out samples are needed for
+    a paired test to reliably detect moderate improvements (p < 0.05). The
+    optimizer needs far fewer training examples to identify failure patterns."""
+
+    val_ratio: float = 0.20
     """Fraction of the total dataset reserved as a validation set, carved out of
     the training portion. Used to detect overfitting mid-run: if the val score
     plateaus while train scores keep climbing, the prompt is fitting the training
     examples specifically. Set to 0.0 to disable validation splitting.
 
-    With train_ratio=0.8 and val_ratio=0.1 (the defaults), the actual split is:
-      70% train  /  10% val  /  20% test
+    With train_ratio=0.65 and val_ratio=0.20 (the defaults), the actual split is:
+      45% train  /  20% val  /  35% test
 
     Requires train_ratio - val_ratio >= 0.1 (at least 10% left for training)."""
 

@@ -40,8 +40,8 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `-o`, `--output` | — | Save the optimized prompt to this file |
 | `--results-json` | — | Save full results (iterations, scores, analysis) to JSON |
 | `--run-dir` | `.reflex/` | Directory for run history and checkpoints |
-| `--train-split` | `0.8` | Fraction of data used for optimization. The rest is held out for baseline and final eval scores. Set to `1.0` to disable splitting |
-| `--val-split` | `0.1` | Fraction of total data reserved as a validation set, carved from the training portion. Val scores are tracked per-iteration to detect overfitting. Set to `0.0` to disable |
+| `--train-split` | `0.65` | Fraction of data used for optimization. The rest is held out for baseline and final eval scores. Set to `1.0` to disable splitting |
+| `--val-split` | `0.20` | Fraction of total data reserved as a validation set, carved from the training portion. Val scores are tracked per-iteration to detect overfitting. Set to `0.0` to disable |
 | `--early-stopping-patience` | `3` | Stop optimization early if val score has not improved for N consecutive iterations. Only active when `--val-split > 0`. Set to `0` to disable |
 | `--batch-size` | `0` | Mini-batch size for each optimization iteration. `0` = full training set. When > 0, each iteration samples this many examples at random. Baseline and final evals are unaffected |
 | `--full-eval-steps` | `0` | When using `--batch-size`, run a full training-set eval every N iterations. `0` = never. E.g. `--batch-size 32 --full-eval-steps 5` gives accurate checkpoint scores on iters 5, 10, 15, … Full-eval iters are marked in the dashboard |

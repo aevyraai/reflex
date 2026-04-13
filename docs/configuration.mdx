@@ -80,8 +80,8 @@ config = OptimizerConfig(
     strategy="auto",                   # auto, iterative, structural, pdo, fewshot
     max_iterations=10,                 # total iteration budget
     score_threshold=0.85,              # stop when score reaches this
-    train_ratio=0.8,                   # 70% train / 10% val / 20% test (default)
-    val_ratio=0.1,                     # fraction reserved for validation (0 = disabled)
+    train_ratio=0.65,                  # 45% train / 20% val / 35% test (default)
+    val_ratio=0.20,                    # fraction reserved for validation (0 = disabled)
     early_stopping_patience=3,         # stop when val score stagnates for N iters (0 = disabled)
     batch_size=0,                      # 0 = full training set; >0 = examples per iteration
     batch_seed=42,                     # base seed for mini-batch sampling
@@ -99,8 +99,8 @@ config = OptimizerConfig(
 | `strategy` | `"auto"` | Which optimization strategy to use (or any custom registered name) |
 | `max_iterations` | `10` | Maximum iterations (total budget for auto across all phases) |
 | `score_threshold` | `0.85` | Target score — optimization stops when reached. Set automatically by `--target` or `--verdict-results` |
-| `train_ratio` | `0.8` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
-| `val_ratio` | `0.1` | Fraction of total examples reserved as a validation set, carved from the training portion. Used to detect overfitting mid-run. Set to `0.0` to disable |
+| `train_ratio` | `0.65` | Fraction of examples used for optimization. The rest are held out for baseline and final eval. Set to `1.0` to disable splitting |
+| `val_ratio` | `0.20` | Fraction of total examples reserved as a validation set, carved from the training portion. Used to detect overfitting mid-run. Set to `0.0` to disable |
 | `early_stopping_patience` | `3` | Stop optimization early if val score has not improved for this many consecutive iterations. Only active when `val_ratio > 0`. Set to `0` to disable |
 | `batch_size` | `0` | Mini-batch size per iteration. `0` = full training set. When > 0, each iteration samples this many examples at random from the training data |
 | `batch_seed` | `42` | Base seed for mini-batch sampling. Iteration `i` uses `batch_seed + i` so every batch is different but the run is reproducible |
@@ -119,9 +119,9 @@ config = OptimizerConfig(
 
 ## Train/test split
 
-By default, reflex splits your dataset 80/20 before running. The 80% train
-set is used during the optimization loop — failing samples are drawn from
-here and all iteration scores are computed on these examples. The 20% test
+By default, reflex splits your dataset 65/35 before running. The 65% train
+portion is used during the optimization loop — failing samples are drawn from
+here and all iteration scores are computed on these examples. The 35% test
 set is held out completely, and the baseline and final scores you see in the
 results summary are computed on that held-out set only.
 
@@ -131,11 +131,11 @@ improvement, especially on small datasets where a handful of examples have
 an outsized effect on the mean score.
 
 ```bash
-# Default: 80/20 split (the banner shows "80 train / 20 test")
+# Default: 65/35 split (the banner shows "65 train / 35 test")
 aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1
 
-# Smaller test set (90/10)
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 0.9
+# Smaller test set (80/20)
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 0.8
 
 # No split — all examples used for both optimization and eval
 aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 1.0
@@ -164,7 +164,7 @@ specifically rather than generalizing. Early stopping on val plateau saves
 you compute and returns the least-overfit prompt.
 
 ```bash
-# Default: 70% train / 10% val / 20% test, early stopping patience=3
+# Default: 45% train / 20% val / 35% test, early stopping patience=3
 aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1
 
 # Disable val split
@@ -173,8 +173,8 @@ aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --val-split 0.0
 # Custom patience
 aevyra-reflex optimize data.jsonl prompt.md \
   -m local/llama3.1 \
-  --train-split 0.8 \
-  --val-split 0.1 \
+  --train-split 0.65 \
+  --val-split 0.20 \
   --early-stopping-patience 5
 ```
 
@@ -182,8 +182,8 @@ Python API:
 
 ```python
 config = OptimizerConfig(
-    train_ratio=0.8,
-    val_ratio=0.1,
+    train_ratio=0.65,
+    val_ratio=0.20,
     early_stopping_patience=3,
 )
 ```
@@ -193,7 +193,7 @@ shows all three split sizes, a per-iteration val trajectory, and — if early
 stopping triggered — marks which iteration was actually the best:
 
 ```
-  Train/val/test   : 70 / 10 / 20 samples
+  Train/val/test   : 45 / 20 / 35 samples
   Baseline score   : 0.5500  (on 20-sample test set)
   Final score      : 0.7100  (on 20-sample test set)
   Improvement      : +0.1600 (+29.1%)
@@ -212,7 +212,7 @@ stopping triggered — marks which iteration was actually the best:
 
 <Note>
   The validation set adds one extra eval call per optimization iteration.
-  With `val_ratio=0.1` on 100 examples you're evaluating 10 extra samples
+  With `val_ratio=0.20` on 100 examples you're evaluating 20 extra samples
   per iteration — usually inexpensive compared to the reasoning step.
 </Note>
 

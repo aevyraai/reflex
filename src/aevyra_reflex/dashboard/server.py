@@ -115,8 +115,8 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
         max_tokens  = int(config_dict.get("max_tokens",  1024))
         max_workers = int(config_dict.get("max_workers", 4))
 
-        train_ratio = float(config_dict.get("train_ratio", 0.8))
-        val_ratio = float(config_dict.get("val_ratio", 0.1))
+        train_ratio = float(config_dict.get("train_ratio", 0.65))
+        val_ratio = float(config_dict.get("val_ratio", 0.20))
         early_stopping_patience = int(config_dict.get("early_stopping_patience", 3))
         batch_size = int(config_dict.get("batch_size", 0))
         full_eval_steps = int(config_dict.get("full_eval_steps", 0))
