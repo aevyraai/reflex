@@ -884,13 +884,26 @@ class PromptOptimizer:
         _resumed_best_val_prompt: str = checkpoint.best_val_prompt if (checkpoint and checkpoint.best_val_prompt) else (checkpoint.current_prompt if checkpoint else initial_prompt)
         _resumed_best_val_score: float = checkpoint.best_val_score if checkpoint else -1.0
         _resumed_best_val_iter: int = checkpoint.best_val_iter if checkpoint else 0
+        # Restore global best-val (falls back to per-phase best-val for old checkpoints)
+        _resumed_global_best_val_prompt: str = (
+            checkpoint.global_best_val_prompt if (checkpoint and checkpoint.global_best_val_prompt)
+            else _resumed_best_val_prompt
+        )
+        _resumed_global_best_val_score: float = (
+            checkpoint.global_best_val_score if checkpoint else -1.0
+        )
+        _resumed_global_best_val_iter: int = (
+            checkpoint.global_best_val_iter if checkpoint else 0
+        )
         # Reconstruct the train score at the best-val iteration from saved iteration files
         _resumed_best_val_train_score: float = -1.0
-        if checkpoint and run and _resumed_best_val_iter > 0:
+        _resumed_global_best_val_train_score: float = -1.0
+        if checkpoint and run and (_resumed_best_val_iter > 0 or _resumed_global_best_val_iter > 0):
             for it in run.load_iterations():
                 if it.iteration == _resumed_best_val_iter:
                     _resumed_best_val_train_score = it.score
-                    break
+                if it.iteration == _resumed_global_best_val_iter:
+                    _resumed_global_best_val_train_score = it.score
 
         # Shared mutable state for val tracking and early stopping
         _es: dict[str, Any] = {
@@ -898,10 +911,16 @@ class PromptOptimizer:
             "iterations": [],            # IterationRecord objects collected
             "best_train_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
             "best_train_score": checkpoint.best_score if checkpoint else -1.0,
+            # per-phase best-val: reset at each phase transition for early stopping
             "best_val_prompt": _resumed_best_val_prompt,
             "best_val_score": _resumed_best_val_score,
             "best_val_train_score": _resumed_best_val_train_score,  # train score at best-val iter
             "best_val_iter": _resumed_best_val_iter,  # global iteration number of best val
+            # global best-val: never reset; tracks best val across all phases and resumes
+            "global_best_val_prompt": _resumed_global_best_val_prompt,
+            "global_best_val_score": _resumed_global_best_val_score,
+            "global_best_val_iter": _resumed_global_best_val_iter,
+            "global_best_val_train_score": _resumed_global_best_val_train_score,
             "trajectory": list(checkpoint.score_trajectory) if checkpoint else [],
             "strategy_state": dict(checkpoint.strategy_state) if checkpoint and checkpoint.strategy_state else {},
             "total_reasoning_tokens": _resumed_reasoning_tokens,  # seeded from saved iterations on resume
@@ -952,8 +971,12 @@ class PromptOptimizer:
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
                     best_val_iter=_es["best_val_iter"],
+                    global_best_val_prompt=_es["global_best_val_prompt"] if val_dataset else None,
+                    global_best_val_score=_es["global_best_val_score"],
+                    global_best_val_iter=_es["global_best_val_iter"],
                     accumulated_duration_seconds=_prior_duration_seconds + _time.monotonic() - _run_start_monotonic,
                 ))
+
 
             # --- Validation eval + early stopping ---
             if val_dataset is not None:
@@ -969,6 +992,12 @@ class PromptOptimizer:
                     _es["best_val_train_score"] = record.score
                     _es["best_val_prompt"] = record.system_prompt
                     _es["best_val_iter"] = record.iteration
+                # Also update global best-val (never reset between phases)
+                if val_score >= _es["global_best_val_score"]:
+                    _es["global_best_val_score"] = val_score
+                    _es["global_best_val_prompt"] = record.system_prompt
+                    _es["global_best_val_iter"] = record.iteration
+                    _es["global_best_val_train_score"] = record.score
 
             # Save iteration after val eval so val_score is included
             if run:
@@ -1097,7 +1126,7 @@ class PromptOptimizer:
         except _EarlyStop:
             _early_stopped = True
             # Build a partial result from what we've collected so far
-            best_prompt = _es["best_val_prompt"] if val_dataset else _es["best_train_prompt"]
+            best_prompt = _es["global_best_val_prompt"] if val_dataset else _es["best_train_prompt"]
             best_score = _es["best_val_score"] if val_dataset else _es["best_train_score"]
             from aevyra_reflex.result import OptimizationResult as _OR
             result = _OR(
@@ -1114,11 +1143,11 @@ class PromptOptimizer:
         # Select the prompt to test: when a val set was used, prefer the
         # prompt with the best val score (least likely to be overfit to train).
         # Fall back to the best-train prompt if val tracking was never updated.
-        if val_dataset is not None and _es["best_val_score"] > -1.0:
-            prompt_for_test = _es["best_val_prompt"]
-            _bv_iter = _es["best_val_iter"]
-            _bv_train = _es["best_val_train_score"]
-            _bv_val = _es["best_val_score"]
+        if val_dataset is not None and _es["global_best_val_score"] > -1.0:
+            prompt_for_test = _es["global_best_val_prompt"]
+            _bv_iter = _es["global_best_val_iter"]
+            _bv_train = _es["global_best_val_train_score"]
+            _bv_val = _es["global_best_val_score"]
             _bv_label = (
                 f"iter {_bv_iter}: train={_bv_train:.4f}, val={_bv_val:.4f}"
                 if _bv_train > -1.0 else f"iter {_bv_iter}: val={_bv_val:.4f}"

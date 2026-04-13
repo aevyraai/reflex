@@ -102,6 +102,11 @@ class CheckpointState:
     best_val_score: float = -1.0
     best_val_iter: int = 0
 
+    # Global best-val: never reset between phases; tracks best val across all phases
+    global_best_val_prompt: str | None = None
+    global_best_val_score: float = -1.0
+    global_best_val_iter: int = 0
+
     # Cumulative wall-clock time across all sessions (seconds).
     # Each session adds its elapsed time when writing the final result so
     # multi-session runs show total wall time rather than just the last session.
@@ -465,6 +470,9 @@ class Run:
             best_val_prompt=data.get("best_val_prompt"),
             best_val_score=data.get("best_val_score", -1.0),
             best_val_iter=data.get("best_val_iter", 0),
+            global_best_val_prompt=data.get("global_best_val_prompt"),
+            global_best_val_score=data.get("global_best_val_score", -1.0),
+            global_best_val_iter=data.get("global_best_val_iter", 0),
             timestamp=data.get("timestamp", ""),
         )
 
@@ -596,4 +604,10 @@ def _checkpoint_to_dict(state: CheckpointState) -> dict[str, Any]:
         d["best_val_score"] = state.best_val_score
     if state.best_val_iter > 0:
         d["best_val_iter"] = state.best_val_iter
+    if state.global_best_val_prompt is not None:
+        d["global_best_val_prompt"] = state.global_best_val_prompt
+    if state.global_best_val_score > -1.0:
+        d["global_best_val_score"] = state.global_best_val_score
+    if state.global_best_val_iter > 0:
+        d["global_best_val_iter"] = state.global_best_val_iter
     return d
