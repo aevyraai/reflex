@@ -331,13 +331,17 @@ class TestEarlyStopException(unittest.TestCase):
 class TestEarlyStoppingLogic(unittest.TestCase):
 
     def _iters_since_best(self, val_history):
-        """Replicate the early-stopping check from _checkpointing_callback."""
+        """Mirror the exact formula used in _checkpointing_callback.
+
+        reversed_index is the position of the best score in the reversed list.
+        index 0 = most recent iteration is the best → 0 iters since best.
+        index N = best was N iterations ago.
+        """
         best_val_overall = max(val_history)
-        best_val_idx = len(val_history) - 1 - next(
+        return next(
             i for i, v in enumerate(reversed(val_history))
             if v == best_val_overall
         )
-        return len(val_history) - 1 - best_val_idx
 
     def test_no_plateau_when_improving(self):
         self.assertEqual(self._iters_since_best([0.5, 0.6, 0.7, 0.8]), 0)
@@ -354,6 +358,19 @@ class TestEarlyStoppingLogic(unittest.TestCase):
     def test_ties_counted_from_most_recent(self):
         # Best score appears at index 1 and 3; most-recent best is at 3 → 0 since best
         self.assertEqual(self._iters_since_best([0.5, 0.9, 0.8, 0.9]), 0)
+
+    def test_new_best_after_plateau_does_not_trigger(self):
+        # Regression: run 043 val history for iterative phase.
+        # After 3 declining iters, iter 10 jumps to a new best (0.2529).
+        # iters_since_best should be 0 — early stopping must NOT fire.
+        history = [0.2195, 0.2036, 0.1988, 0.2529]
+        self.assertEqual(self._iters_since_best(history), 0)
+        # With patience=3, 0 < 3 → no stop. The old buggy formula gave 3 → stop.
+
+    def test_exactly_patience_met_at_plateau(self):
+        # 3 consecutive non-improvements after a peak → should trigger (patience=3)
+        history = [0.5, 0.9, 0.8, 0.7, 0.6]
+        self.assertEqual(self._iters_since_best(history), 3)
 
 
 if __name__ == "__main__":
