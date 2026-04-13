@@ -995,8 +995,9 @@ class PromptOptimizer:
                 if patience > 0 and len(_es["val_history"]) >= patience:
                     best_val_overall = _es["best_val_score"]
                     best_val_iter = _es["best_val_iter"]
-                    # Count how many consecutive iterations have not beaten the best val
-                    iters_since_best = len(_es["val_history"]) - 1 - next(
+                    # Count how many consecutive iterations have not beaten the best val.
+                    # reversed_index=0 means the current iteration IS the best → 0 iters since best.
+                    iters_since_best = next(
                         i for i, v in enumerate(reversed(_es["val_history"]))
                         if v == best_val_overall
                     )
