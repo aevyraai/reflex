@@ -794,6 +794,7 @@ class PromptOptimizer:
                 baseline={
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
+                    "total_tokens": baseline.total_tokens,
                 },
             ))
 
