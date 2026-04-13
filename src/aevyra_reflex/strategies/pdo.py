@@ -439,6 +439,7 @@ def _run_duel(
     run_config = RunConfig(
         temperature=config.eval_temperature,
         max_tokens=config.max_tokens,
+        max_workers=config.max_workers,
     )
 
     def _eval_prompt(prompt: str) -> list[str]:

@@ -66,6 +66,7 @@ class IterativeStrategy(Strategy):
         run_config = RunConfig(
             temperature=config.eval_temperature,
             max_tokens=config.max_tokens,
+            max_workers=config.max_workers,
         )
 
         _batch_size = getattr(config, "batch_size", 0)
