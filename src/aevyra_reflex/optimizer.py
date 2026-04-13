@@ -900,6 +900,7 @@ class PromptOptimizer:
                     baseline={
                         "mean_score": baseline.mean_score,
                         "scores_by_metric": baseline.scores_by_metric,
+                        "total_tokens": baseline.total_tokens,
                     },
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
@@ -1013,6 +1014,7 @@ class PromptOptimizer:
                     baseline={
                         "mean_score": baseline.mean_score,
                         "scores_by_metric": baseline.scores_by_metric,
+                        "total_tokens": baseline.total_tokens,
                     },
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
