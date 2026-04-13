@@ -29,20 +29,38 @@ class TestProviderAliases:
             assert alias["base_url"].startswith("https://"), f"{name} base_url not https"
 
     def test_known_aliases_exist(self):
-        expected = {"openrouter", "together", "fireworks", "deepinfra", "groq"}
+        # openrouter is intentionally absent — verdict has a native OpenRouterProvider
+        expected = {"together", "fireworks", "deepinfra", "groq"}
         assert expected.issubset(set(PROVIDER_ALIASES.keys()))
+        assert "openrouter" not in PROVIDER_ALIASES, (
+            "openrouter must not be in PROVIDER_ALIASES — it is handled natively by "
+            "verdict's OpenRouterProvider which reads OPENROUTER_API_KEY directly. "
+            "Adding it here caused confusing OPENAI_API_KEY errors."
+        )
 
 
 class TestResolveProvider:
     """Tests for _resolve_provider()."""
 
-    def test_openrouter_resolves(self, monkeypatch):
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    def test_openrouter_passes_through(self):
+        # openrouter is NOT in PROVIDER_ALIASES — it passes through to verdict's
+        # native OpenRouterProvider which reads OPENROUTER_API_KEY itself.
         r = _resolve_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
-        assert r["provider_name"] == "openai"
-        assert r["base_url"] == "https://openrouter.ai/api/v1"
-        assert r["api_key"] == "sk-or-test"
+        assert r["provider_name"] == "openrouter"
         assert r["model"] == "meta-llama/llama-3.1-8b-instruct"
+        assert r["api_key"] is None   # key is left to OpenRouterProvider to resolve
+        assert r["base_url"] is None
+
+    def test_openrouter_missing_key_raises_correct_error(self, monkeypatch):
+        """Regression: missing OPENROUTER_API_KEY must surface a clear ValueError,
+        not the confusing 'OPENAI_API_KEY must be set' error that occurred when
+        openrouter was aliased to the openai provider."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        from aevyra_verdict.providers.openrouter_provider import OpenRouterProvider
+        with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+            OpenRouterProvider(model="meta-llama/llama-3.1-8b-instruct")
 
     def test_together_resolves(self, monkeypatch):
         monkeypatch.setenv("TOGETHER_API_KEY", "tog-test")
@@ -68,21 +86,10 @@ class TestResolveProvider:
         assert r["provider_name"] == "local"
         assert r["base_url"] is None
 
-    def test_custom_overrides_alias_defaults(self, monkeypatch):
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-default")
-        r = _resolve_provider(
-            "openrouter", "test-model",
-            api_key="custom-key",
-            base_url="https://custom.url/v1",
-        )
+    def test_custom_api_key_passthrough(self):
+        # Explicitly passed api_key propagates for any non-alias provider
+        r = _resolve_provider("openrouter", "test-model", api_key="custom-key")
         assert r["api_key"] == "custom-key"
-        assert r["base_url"] == "https://custom.url/v1"
-
-    def test_falls_back_to_openai_key(self, monkeypatch):
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
-        r = _resolve_provider("openrouter", "some-model")
-        assert r["api_key"] == "sk-openai-fallback"
 
     def test_unknown_alias_passes_through(self):
         r = _resolve_provider("some_new_provider", "some-model")
