@@ -281,12 +281,18 @@ class OptimizationResult:
                 f"last one."
             )
         elif flat_steps > n // 2:
+            _phases_run = {p.get("strategy") for p in (self.phase_history or [])}
+            _fewshot_run = "fewshot" in _phases_run or self.strategy_name == "fewshot"
+            _plateau_hint = (
+                "A larger or more capable model may be needed to go higher."
+                if _fewshot_run else
+                "A larger model or adding few-shot examples may be needed to go higher."
+            )
             lines.append(
                 "The score plateaued — it jumped initially then "
                 "stopped improving despite further prompt changes. "
-                "This usually means the model has hit its capability "
-                "ceiling for this task. A larger model or adding "
-                "few-shot examples may be needed to go higher."
+                f"This usually means the model has hit its capability "
+                f"ceiling for this task. {_plateau_hint}"
             )
         elif improving_steps > declining_steps * 2:
             lines.append(
@@ -340,10 +346,18 @@ class OptimizationResult:
                 )
             if self.baseline and self.final:
                 score_gap = 1.0 - final
-                if score_gap > 0.3:
+                phases_run = {p.get("strategy") for p in (self.phase_history or [])}
+                fewshot_already_run = "fewshot" in phases_run or self.strategy_name == "fewshot"
+                if score_gap > 0.3 and not fewshot_already_run:
                     suggestions.append(
                         "try the 'fewshot' strategy — adding examples "
                         "often helps smaller models"
+                    )
+                elif score_gap > 0.3 and fewshot_already_run:
+                    suggestions.append(
+                        "try a different eval model — few-shot examples "
+                        "were already added but the score didn't improve; "
+                        "the model may not be capable enough for this task"
                     )
 
         if suggestions:
