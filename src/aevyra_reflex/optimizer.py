@@ -818,10 +818,14 @@ class PromptOptimizer:
         _resumed_val_history: list[float] = []
         _resumed_eval_tokens: int = 0
         _resumed_reasoning_tokens: int = 0
+        # Full val trajectory across ALL phases — never cleared unlike val_history
+        # which resets at each phase boundary for per-phase early stopping.
+        _val_trajectory_all: list[float] = []
         if checkpoint and run:
             for it in run.load_iterations():
                 if it.val_score is not None:
                     _resumed_val_history.append(it.val_score)
+                    _val_trajectory_all.append(it.val_score)
                 _resumed_eval_tokens += it.eval_tokens
                 _resumed_reasoning_tokens += it.reasoning_tokens
             _baseline_tok = checkpoint.baseline.get("total_tokens", 0) if checkpoint and checkpoint.baseline else 0
@@ -912,6 +916,7 @@ class PromptOptimizer:
                 val_snap = self._run_eval_single(record.system_prompt, dataset=val_dataset)
                 val_score = val_snap.mean_score
                 _es["val_history"].append(val_score)
+                _val_trajectory_all.append(val_score)  # never cleared — for final summary
                 record.val_score = val_score
 
                 # Track best val prompt (the one least prone to overfitting)
@@ -1096,7 +1101,7 @@ class PromptOptimizer:
         # Record validation split info
         if n_val > 0:
             result.val_size = n_val
-            result.val_trajectory = list(_es["val_history"])
+            result.val_trajectory = _val_trajectory_all
         result.early_stopped = _early_stopped
 
         # Record mini-batch size when active
