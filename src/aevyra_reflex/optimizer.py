@@ -1051,7 +1051,11 @@ class PromptOptimizer:
         eval_runs = self.config.eval_runs
         eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
         n_test_samples = len(test_dataset.conversations) if test_dataset else "?"
-        if val_dataset is not None:
+        # Select the prompt to test: when a val set was used, prefer the
+        # prompt with the best val score (least likely to be overfit to train).
+        # Fall back to the best-train prompt if val tracking was never updated.
+        if val_dataset is not None and _es["best_val_score"] > -1.0:
+            prompt_for_test = _es["best_val_prompt"]
             _bv_iter = _es["best_val_iter"]
             _bv_train = _es["best_val_train_score"]
             _bv_val = _es["best_val_score"]
@@ -1064,8 +1068,9 @@ class PromptOptimizer:
                 f"({_bv_label}) — {n_test_samples} held-out samples..."
             )
         else:
+            prompt_for_test = result.best_prompt
             logger.info(f"{tag} Running TEST SET eval{eval_label} ({n_test_samples} held-out samples)...")
-        final = self._run_eval(result.best_prompt, dataset=test_dataset)
+        final = self._run_eval(prompt_for_test, dataset=test_dataset)
         logger.info(
             f"{tag} TEST SET score: {final.mean_score:.4f}  "
             f"(baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})"

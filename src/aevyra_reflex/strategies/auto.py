@@ -320,16 +320,25 @@ class AutoStrategy(Strategy):
             # phases doesn't re-run this one.
             # Also reset val history so early stopping starts fresh — one
             # phase's plateau shouldn't penalize the next strategy.
+            remaining_global = config.max_iterations - global_iter
+            has_more_phases = remaining_global > 0 and not (
+                sub_result.converged or sub_result.best_score >= config.score_threshold
+            )
             if update_strategy_state:
-                update_strategy_state({
+                state: dict[str, Any] = {
                     "phase_idx": phase_idx + 1,
                     "phase_iters_done": 0,
                     "axes_used": list(axes_used),
                     "phase_history": list(phase_history),
                     "global_iter": global_iter,
                     "last_phase_score": last_phase_score,
-                    "_reset_val_history": True,
-                })
+                }
+                # Reset val history so the next phase's early stopping starts
+                # fresh.  Skip this on the last phase so the final test eval
+                # still sees the best-val prompt and its logged score.
+                if has_more_phases:
+                    state["_reset_val_history"] = True
+                update_strategy_state(state)
 
             logger.info(
                 f"  Phase {phase_idx + 1} ({axis}) done: "
