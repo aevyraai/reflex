@@ -194,6 +194,9 @@ class FewShotStrategy(Strategy):
 
             # Ask Claude to select/refine examples (or restore from checkpoint)
             reasoning_before = getattr(agent, "tokens_used", 0)
+            # Reasoning tokens from a previous session (saved in mid-iter checkpoint)
+            # are carried forward so a resume doesn't zero out the spent tokens.
+            _saved_reasoning_tokens: int = _saved.get("reasoning_tokens_so_far", 0)
             if _saved_stage == "eval_done":
                 # Restore everything from the mid-iter checkpoint
                 composite_prompt = _saved["composite_prompt"]
@@ -249,12 +252,15 @@ class FewShotStrategy(Strategy):
                     _bootstrap_eval_tokens = 0
 
                 # Checkpoint after eval so a crash during the next refine call
-                # doesn't force re-running this expensive eval.
+                # doesn't force re-running this expensive eval. Also save
+                # reasoning tokens spent this iteration (agent selection) so
+                # they survive a resume that skips the selection on replay.
                 _save_iter_state({"iter": i, "stage": "eval_done",
                                   "composite_prompt": composite_prompt,
                                   "selected": selected, "instruction": instruction,
                                   "score": score, "eval_tokens": eval_tokens,
-                                  "failing_samples": failing_samples})
+                                  "failing_samples": failing_samples,
+                                  "reasoning_tokens_so_far": getattr(agent, "tokens_used", 0) - reasoning_before})
 
             record = IterationRecord(
                 iteration=i + 1,
@@ -264,7 +270,7 @@ class FewShotStrategy(Strategy):
                 eval_tokens=eval_tokens,
                 is_full_eval=is_full_eval,
             )
-            record.reasoning_tokens = getattr(agent, "tokens_used", 0) - reasoning_before
+            record.reasoning_tokens = (getattr(agent, "tokens_used", 0) - reasoning_before) + _saved_reasoning_tokens
             iterations.append(record)
 
             logger.info(f"  Score: {score:.4f} (target: {config.score_threshold:.4f})")

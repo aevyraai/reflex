@@ -231,6 +231,9 @@ class StructuralStrategy(Strategy):
 
             # 2. Ask reasoning model to analyze structural weaknesses
             reasoning_before = getattr(agent, "tokens_used", 0)
+            # Reasoning tokens from a previous session (saved in mid-iter checkpoint)
+            # are carried forward so a resume doesn't zero out the spent tokens.
+            _saved_reasoning_tokens: int = _saved.get("reasoning_tokens_so_far", 0)
             if _saved_stage in ("analyzed", "variants_generated"):
                 analysis = _saved["analysis"]
                 round_transforms = _saved["round_transforms"]
@@ -259,7 +262,8 @@ class StructuralStrategy(Strategy):
                 _save_iter_state({"iter": i, "stage": "analyzed",
                                   "score": current_score, "eval_tokens": eval_tokens,
                                   "failing_samples": failing_samples,
-                                  "analysis": analysis, "round_transforms": round_transforms})
+                                  "analysis": analysis, "round_transforms": round_transforms,
+                                  "reasoning_tokens_so_far": getattr(agent, "tokens_used", 0) - reasoning_before})
 
             # 4. Generate structural variants (in parallel)
             variants: list[tuple[str, str]] = []  # (transform_name, prompt_text)
@@ -314,7 +318,8 @@ class StructuralStrategy(Strategy):
                                   "score": current_score, "eval_tokens": eval_tokens,
                                   "failing_samples": failing_samples,
                                   "analysis": analysis, "round_transforms": round_transforms,
-                                  "variants": [[n, p] for n, p in variants]})
+                                  "variants": [[n, p] for n, p in variants],
+                                  "reasoning_tokens_so_far": getattr(agent, "tokens_used", 0) - reasoning_before})
 
             # 5. Evaluate all variants in parallel and pick the best
             best_variant_score = current_score
@@ -398,8 +403,10 @@ class StructuralStrategy(Strategy):
             else:
                 logger.info(f"{tag} No variant improved over current prompt.")
 
-            # Capture all reasoning tokens for this iteration (analysis + all variant generation)
-            record.reasoning_tokens = getattr(agent, "tokens_used", 0) - reasoning_before
+            # Capture all reasoning tokens for this iteration (analysis + all variant generation).
+            # Add any tokens spent in a previous session (restored from mid-iter checkpoint)
+            # so a resume doesn't lose the pre-crash reasoning spend.
+            record.reasoning_tokens = (getattr(agent, "tokens_used", 0) - reasoning_before) + _saved_reasoning_tokens
 
             # Fire callback now that reasoning_tokens + reasoning text are populated
             if on_iteration:

@@ -823,10 +823,10 @@ class PromptOptimizer:
                     _resumed_val_history.append(it.val_score)
                 _resumed_eval_tokens += it.eval_tokens
                 _resumed_reasoning_tokens += it.reasoning_tokens
-            if _resumed_eval_tokens or _resumed_reasoning_tokens:
+            _baseline_tok = checkpoint.baseline.get("total_tokens", 0) if checkpoint and checkpoint.baseline else 0
+            if _baseline_tok or _resumed_eval_tokens or _resumed_reasoning_tokens:
                 def _fmtk(n: int) -> str:
                     return f"{n / 1000:.1f}K" if n >= 1000 else str(n)
-                _baseline_tok = checkpoint.baseline.get("total_tokens", 0) if checkpoint and checkpoint.baseline else 0
                 logger.info(
                     f"Tokens so far: eval={_fmtk(_baseline_tok + _resumed_eval_tokens)}  "
                     f"reasoning={_fmtk(_resumed_reasoning_tokens)}"
