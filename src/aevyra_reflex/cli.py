@@ -276,9 +276,16 @@ def optimize(
         typer.echo("Error: use --verdict-results or --target, not both.", err=True)
         raise typer.Exit(code=1)
 
-    # Load
+    # Load — auto-detect CSV vs JSONL from extension
     from aevyra_verdict import Dataset
-    ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
+    if dataset.suffix.lower() == ".csv":
+        ds = Dataset.from_csv(
+            str(dataset),
+            input_field=input_field or "input",
+            output_field=output_field if output_field is not None else "ideal",
+        )
+    else:
+        ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
     initial_prompt = prompt.read_text().strip()
 
     # Resolve the score threshold.

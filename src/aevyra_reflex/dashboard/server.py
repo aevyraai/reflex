@@ -410,6 +410,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             "run_id": run.run_id,
             "run_dir": str(run.run_dir),
             "is_complete": run.is_complete,
+            "is_running": run.is_running,
             "config": config,
             "baseline": baseline,
             "iterations": [

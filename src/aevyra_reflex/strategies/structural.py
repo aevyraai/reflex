@@ -145,8 +145,35 @@ class StructuralStrategy(Strategy):
         _batch_seed = getattr(config, "batch_seed", 42)
         _full_eval_steps = getattr(config, "full_eval_steps", 0)
 
+        # Restore cross-iteration state on resume (transforms tried, history, current prompt)
+        rs = resume_state or {}
+        if rs.get("current_prompt"):
+            current_prompt = rs["current_prompt"]
+        if rs.get("transforms_tried"):
+            transforms_tried = set(rs["transforms_tried"])
+        if rs.get("structural_history"):
+            structural_history = list(rs["structural_history"])
+
+        # Mid-iteration checkpoint: stores stage results so a crash during
+        # variant eval doesn't force re-running the base eval and analysis.
+        _iter_state: dict = rs.get("structural_iter_state", {})
+
+        def _save_iter_state(state: dict) -> None:
+            if update_strategy_state:
+                update_strategy_state({
+                    "current_prompt": current_prompt,
+                    "transforms_tried": list(transforms_tried),
+                    "structural_history": structural_history,
+                    "structural_iter_state": state,
+                })
+
         for i in range(config.max_iterations):
             tag = f"[structural][iter {i + 1}/{config.max_iterations}]"
+
+            # Check if we have saved mid-iteration state for this iteration
+            _saved = _iter_state if _iter_state.get("iter") == i else {}
+            _saved_stage = _saved.get("stage", "")
+
             logger.info(f"{tag} Starting")
 
             # Determine full-eval checkpoint or mini-batch for this iteration
@@ -157,19 +184,28 @@ class StructuralStrategy(Strategy):
             )
             effective_batch = 0 if is_full_eval else _batch_size
 
-            # 1. Evaluate current prompt
-            eval_label = "full-eval checkpoint" if is_full_eval else "eval"
-            logger.info(f"{tag} Running {eval_label}...")
-            current_score, failing_samples, eval_tokens = _run_eval(
-                prompt=current_prompt,
-                dataset=dataset,
-                providers=providers,
-                metrics=metrics,
-                run_config=run_config,
-                bottom_k=s_config.bottom_k,
-                batch_size=effective_batch,
-                iteration_seed=_batch_seed + i,
-            )
+            # 1. Evaluate current prompt (skip if already done in a previous session)
+            if _saved_stage in ("base_eval_done", "analyzed", "variants_generated"):
+                current_score = _saved["score"]
+                eval_tokens = _saved["eval_tokens"]
+                failing_samples = _saved["failing_samples"]
+                logger.info(f"{tag} Resuming — reusing saved base eval (score: {current_score:.4f})")
+            else:
+                eval_label = "full-eval checkpoint" if is_full_eval else "eval"
+                logger.info(f"{tag} Running {eval_label}...")
+                current_score, failing_samples, eval_tokens = _run_eval(
+                    prompt=current_prompt,
+                    dataset=dataset,
+                    providers=providers,
+                    metrics=metrics,
+                    run_config=run_config,
+                    bottom_k=s_config.bottom_k,
+                    batch_size=effective_batch,
+                    iteration_seed=_batch_seed + i,
+                )
+                _save_iter_state({"iter": i, "stage": "base_eval_done",
+                                  "score": current_score, "eval_tokens": eval_tokens,
+                                  "failing_samples": failing_samples})
 
             record = IterationRecord(
                 iteration=i + 1,
@@ -179,8 +215,8 @@ class StructuralStrategy(Strategy):
                 is_full_eval=is_full_eval,
             )
             iterations.append(record)
-            if on_iteration:
-                on_iteration(record)
+            # NOTE: on_iteration is called AFTER reasoning/variants are done below,
+            # so the dashboard and checkpoint get reasoning_tokens + reasoning text.
 
             logger.info(f"{tag} Score: {current_score:.4f}  target: {config.score_threshold:.4f}  failing samples: {len(failing_samples)}")
 
@@ -195,71 +231,90 @@ class StructuralStrategy(Strategy):
 
             # 2. Ask reasoning model to analyze structural weaknesses
             reasoning_before = getattr(agent, "tokens_used", 0)
-            logger.info(f"{tag} Analyzing structural weaknesses (transform history: {len(structural_history)} entries)...")
-            analysis = agent.analyze_prompt_structure(
-                system_prompt=current_prompt,
-                failing_samples=failing_samples,
-                structural_history=structural_history,
-            )
-            record.reasoning_tokens = getattr(agent, "tokens_used", 0) - reasoning_before
+            if _saved_stage in ("analyzed", "variants_generated"):
+                analysis = _saved["analysis"]
+                round_transforms = _saved["round_transforms"]
+                for t in round_transforms:
+                    transforms_tried.add(t)
+                logger.info(f"{tag} Resuming — reusing saved analysis")
+            else:
+                logger.info(f"{tag} Analyzing structural weaknesses (transform history: {len(structural_history)} entries)...")
+                analysis = agent.analyze_prompt_structure(
+                    system_prompt=current_prompt,
+                    failing_samples=failing_samples,
+                    structural_history=structural_history,
+                )
 
-            # 3. Pick transforms we haven't tried yet, plus agent-guided variant
-            untried = [k for k in transform_keys if k not in transforms_tried]
-            if not untried:
-                # All tried — reset and let the agent guide selection
-                transforms_tried.clear()
-                untried = transform_keys[:]
+                # 3. Pick transforms we haven't tried yet, plus agent-guided variant
+                untried = [k for k in transform_keys if k not in transforms_tried]
+                if not untried:
+                    # All tried — reset and let the agent guide selection
+                    transforms_tried.clear()
+                    untried = transform_keys[:]
 
-            # Select a subset for this round
-            round_transforms = untried[: s_config.variants_per_round - 1]
-            for t in round_transforms:
-                transforms_tried.add(t)
+                # Select a subset for this round
+                round_transforms = untried[: s_config.variants_per_round - 1]
+                for t in round_transforms:
+                    transforms_tried.add(t)
+                _save_iter_state({"iter": i, "stage": "analyzed",
+                                  "score": current_score, "eval_tokens": eval_tokens,
+                                  "failing_samples": failing_samples,
+                                  "analysis": analysis, "round_transforms": round_transforms})
 
             # 4. Generate structural variants (in parallel)
             variants: list[tuple[str, str]] = []  # (transform_name, prompt_text)
 
-            def _gen_variant(t_name: str) -> tuple[str, str]:
-                t_instruction = STRUCTURAL_TRANSFORMS[t_name]
-                variant = agent.restructure_prompt(
-                    current_prompt=current_prompt,
-                    transform_instruction=t_instruction,
-                    analysis=analysis,
-                )
-                return (t_name, variant)
-
             max_workers = min(len(round_transforms) + 1, config.max_workers or 4)
             num_variants = len(round_transforms) + 1  # transforms + freeform
 
-            logger.info(f"{tag} Generating {num_variants} variants ({max_workers} workers)...")
-            t0 = time.time()
-
-            with ThreadPoolExecutor(max_workers=max_workers) as gen_pool:
-                gen_futures = {
-                    gen_pool.submit(_gen_variant, t_name): t_name
-                    for t_name in round_transforms
-                }
-                freeform_future = gen_pool.submit(
-                    lambda: (
-                        "agent_guided",
-                        agent.freeform_restructure(
-                            current_prompt=current_prompt,
-                            failing_samples=failing_samples,
-                            analysis=analysis,
-                            score_trajectory=[r.score for r in iterations],
-                            structural_history=structural_history,
-                        ),
+            if _saved_stage == "variants_generated":
+                variants = [tuple(v) for v in _saved["variants"]]  # type: ignore[misc]
+                logger.info(f"{tag} Resuming — reusing {len(variants)} saved variants")
+            else:
+                def _gen_variant(t_name: str) -> tuple[str, str]:
+                    t_instruction = STRUCTURAL_TRANSFORMS[t_name]
+                    variant = agent.restructure_prompt(
+                        current_prompt=current_prompt,
+                        transform_instruction=t_instruction,
+                        analysis=analysis,
                     )
-                )
+                    return (t_name, variant)
 
-                for future in as_completed(gen_futures):
-                    t_name, variant = future.result()
-                    variants.append((t_name, variant))
+                logger.info(f"{tag} Generating {num_variants} variants ({max_workers} workers)...")
+                t0 = time.time()
 
-                freeform_name, freeform_text = freeform_future.result()
-                variants.append((freeform_name, freeform_text))
+                with ThreadPoolExecutor(max_workers=max_workers) as gen_pool:
+                    gen_futures = {
+                        gen_pool.submit(_gen_variant, t_name): t_name
+                        for t_name in round_transforms
+                    }
+                    freeform_future = gen_pool.submit(
+                        lambda: (
+                            "agent_guided",
+                            agent.freeform_restructure(
+                                current_prompt=current_prompt,
+                                failing_samples=failing_samples,
+                                analysis=analysis,
+                                score_trajectory=[r.score for r in iterations],
+                                structural_history=structural_history,
+                            ),
+                        )
+                    )
 
-            gen_elapsed = time.time() - t0
-            logger.info(f"{tag} Generated {num_variants} variants in {gen_elapsed:.1f}s")
+                    for future in as_completed(gen_futures):
+                        t_name, variant = future.result()
+                        variants.append((t_name, variant))
+
+                    freeform_name, freeform_text = freeform_future.result()
+                    variants.append((freeform_name, freeform_text))
+
+                gen_elapsed = time.time() - t0
+                logger.info(f"{tag} Generated {num_variants} variants in {gen_elapsed:.1f}s")
+                _save_iter_state({"iter": i, "stage": "variants_generated",
+                                  "score": current_score, "eval_tokens": eval_tokens,
+                                  "failing_samples": failing_samples,
+                                  "analysis": analysis, "round_transforms": round_transforms,
+                                  "variants": [[n, p] for n, p in variants]})
 
             # 5. Evaluate all variants in parallel and pick the best
             best_variant_score = current_score
@@ -272,8 +327,8 @@ class StructuralStrategy(Strategy):
             _iter_batch_size = effective_batch
             _iter_seed = _batch_seed + i
 
-            def _eval_variant(v_name: str, v_prompt: str) -> tuple[str, str, float]:
-                v_score, _, _toks = _run_eval(
+            def _eval_variant(v_name: str, v_prompt: str) -> tuple[str, str, float, int]:
+                v_score, _, v_toks = _run_eval(
                     prompt=v_prompt,
                     dataset=dataset,
                     providers=providers,
@@ -283,7 +338,7 @@ class StructuralStrategy(Strategy):
                     batch_size=_iter_batch_size,
                     iteration_seed=_iter_seed,
                 )
-                return v_name, v_prompt, v_score
+                return v_name, v_prompt, v_score, v_toks
 
             logger.info(f"{tag} Evaluating {len(variants)} variants ({max_workers} workers)...")
             t0 = time.time()
@@ -294,7 +349,8 @@ class StructuralStrategy(Strategy):
                     for v_name, v_prompt in variants
                 ]
                 for future in as_completed(eval_futures):
-                    v_name, v_prompt, v_score = future.result()
+                    v_name, v_prompt, v_score, v_toks = future.result()
+                    record.eval_tokens += v_toks
                     variant_scores[v_name] = v_score
                     delta = v_score - current_score
                     sign = "+" if delta >= 0 else ""
@@ -325,11 +381,34 @@ class StructuralStrategy(Strategy):
 
             record.change_summary = best_variant_name if best_variant_name != "current" else ""
 
+            # Store reasoning so the dashboard can display it
+            variant_lines = "\n".join(
+                f"  {name}: {score:.4f} ({'winner' if name == best_variant_name else ('Δ' + ('+' if score >= current_score else '') + f'{score - current_score:.4f}')})"
+                for name, score in sorted(variant_scores.items(), key=lambda x: -x[1])
+            )
+            record.reasoning = (
+                f"{analysis}\n\n"
+                f"Transforms tried:\n{variant_lines}\n\n"
+                f"Winner: {best_variant_name}"
+            )
+
             if best_variant_name != "current":
                 logger.info(f"{tag} Winner: {best_variant_name} ({current_score:.4f} → {best_variant_score:.4f}, Δ{sign}{delta:.4f})")
                 current_prompt = best_variant_prompt
             else:
                 logger.info(f"{tag} No variant improved over current prompt.")
+
+            # Capture all reasoning tokens for this iteration (analysis + all variant generation)
+            record.reasoning_tokens = getattr(agent, "tokens_used", 0) - reasoning_before
+
+            # Fire callback now that reasoning_tokens + reasoning text are populated
+            if on_iteration:
+                on_iteration(record)
+
+            # Clear mid-iter state now that this iteration is fully committed,
+            # and persist updated cross-iteration state (transforms tried, history).
+            _iter_state = {}
+            _save_iter_state({})
 
         best = max(iterations, key=lambda r: r.score)
         return OptimizationResult(

@@ -628,6 +628,8 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
   const threshold = optConfig && optConfig.score_threshold;
   const phases = groupPhases(iterations, strategy);
   const allIters = phases.flatMap(p => p.iters);
+  // Best train score — highest score achieved during training iterations
+  const bestTrainScore = allIters.length > 0 ? Math.max(...allIters.map(i => i.score)) : null;
 
   // ── Layout: single vertical chain ─────────────────────
   // Phases are sequential — each phase header sits between the previous
@@ -723,7 +725,7 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
       const gi = allIters.findIndex(x => x.iteration === it.iteration);
       const prevScore = gi === 0 ? baselineScore : allIters[gi - 1].score;
       const delta = prevScore != null ? it.score - prevScore : null;
-      const isBest = bestScore != null && Math.abs(it.score - bestScore) < 0.0001;
+      const isBest = bestTrainScore != null && Math.abs(it.score - bestTrainScore) < 0.0001;
       const dc = delta == null ? color : delta > 0.0005 ? '#00cc77' : delta < -0.0005 ? '#ff4455' : '#888';
 
       const isFullEval = !!it.is_full_eval;
@@ -786,7 +788,7 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
         const imp = bestScore - baselineScore;
         if (imp > 0.0001) hint = '+' + imp.toFixed(4) + ' (' + (imp / baselineScore * 100).toFixed(1) + '%)';
       }
-      wrap.appendChild(place(termNode('Best', bestScore, '#00cc77', hint), tx, item.y, TW));
+      wrap.appendChild(place(termNode('Test Score', bestScore, '#00cc77', hint), tx, item.y, TW));
     }
   });
 
@@ -834,7 +836,7 @@ async function renderRunDetail(runId) {
   const improvement = (baselineScore != null && bestScore != null) ? bestScore - baselineScore : null;
   const improvPct = (improvement != null && baselineScore > 0) ? (improvement / baselineScore * 100) : null;
 
-  const status = run.is_complete ? 'completed' : (checkpoint ? 'interrupted' : 'running');
+  const status = run.is_complete ? 'completed' : (run.is_running ? 'running' : (checkpoint ? 'interrupted' : 'running'));
 
   // Back button
   app.appendChild(el('button', { class: 'back-btn', onClick: () => { location.hash = '/'; } }, '\u2190 All runs'));
@@ -864,10 +866,16 @@ async function renderRunDetail(runId) {
   };
 
   statsRow.appendChild(mkStat('Baseline', fmtScore(baselineScore)));
-  statsRow.appendChild(mkStat('Best Score', fmtScore(bestScore), 'green',
+  // Best train score — highest score seen during training iterations
+  const bestIterScore = iterations.length > 0 ? Math.max(...iterations.map(i => i.score)) : null;
+  if (bestIterScore != null) {
+    statsRow.appendChild(mkStat('Best Train', fmtScore(bestIterScore), 'accent'));
+  }
+  // Test score — held-out test set evaluation of best prompt
+  statsRow.appendChild(mkStat('Test Score', fmtScore(bestScore), 'green',
     improvement > 0 ? el('div', { class: 'improvement' }, '+' + improvement.toFixed(4) + ' (' + (improvPct||0).toFixed(1) + '%)') : null
   ));
-  // Only show Final if it differs from Best (verification eval divergence)
+  // Only show Final if it differs from Test (verification eval divergence)
   if (finalScore != null && bestScore != null && Math.abs(finalScore - bestScore) > 0.0001) {
     statsRow.appendChild(mkStat('Verified', fmtScore(finalScore)));
   }
@@ -961,7 +969,11 @@ async function renderRunDetail(runId) {
   // Score trajectory (shown when there are iterations)
   if (iterations.length > 0) {
     const trainScores = iterations.map(it => it.score);
-    const valTraj = result && result.val_trajectory && result.val_trajectory.length ? result.val_trajectory : null;
+    // Use result.val_trajectory if available (completed run), otherwise derive from per-iteration val_scores
+    const iterValScores = iterations.map(it => it.val_score).filter(v => v != null);
+    const valTraj = (result && result.val_trajectory && result.val_trajectory.length)
+      ? result.val_trajectory
+      : (iterValScores.length > 0 ? iterValScores : null);
 
     // Build compact sparkline: dual series SVG
     const spW = 560, spH = 80;
@@ -1750,10 +1762,12 @@ function renderLiveRun(jobId) {
   const scoreBig = el('div', { class: 'live-score-big' }, '--');
   const scoreLabel = el('div', { class: 'live-score-label' }, 'Latest score');
   const baselineEl = el('div', { style: { marginTop: '16px', fontSize: '12px', color: 'var(--text-2)' } }, 'Baseline: —');
+  const reasonTokEl = el('div', { style: { marginTop: '6px', fontSize: '12px', color: 'var(--text-2)', fontFamily: 'var(--mono)' } });
+  let totalReasonTok = 0;
   const iterTrack = el('div', { class: 'live-iter-track' });
   const rightPanel = el('div', { class: 'card' },
     el('div', { class: 'section-title' }, 'Score'),
-    scoreBig, scoreLabel, baselineEl,
+    scoreBig, scoreLabel, baselineEl, reasonTokEl,
     el('div', { style: { marginTop: '20px' } },
       el('div', { class: 'section-title' }, 'Iterations'),
       iterTrack
@@ -1812,6 +1826,11 @@ function renderLiveRun(jobId) {
       scores.push(score);
 
       scoreBig.textContent = score.toFixed(4);
+      const iterRTok = ev.reasoning_tokens || 0;
+      if (iterRTok) {
+        totalReasonTok += iterRTok;
+        reasonTokEl.textContent = `Reasoning tokens: ${fmtTok(totalReasonTok)}`;
+      }
       addLog(`iter ${String(iter).padStart(2, ' ')}  score: ${score.toFixed(4)}`, 'score');
 
       // Iter bar row
@@ -1847,7 +1866,7 @@ function renderLiveRun(jobId) {
       statusBadge.textContent = '✓ completed';
       cancelBtn.style.display = 'none';
       const imp = ev.improvement_pct != null ? ' (' + (ev.improvement_pct >= 0 ? '+' : '') + ev.improvement_pct.toFixed(1) + '%)' : '';
-      addLog(`Done — best score: ${ev.best_score != null ? ev.best_score.toFixed(4) : '--'}${imp}`, 'done');
+      addLog(`Done — test score: ${ev.best_score != null ? ev.best_score.toFixed(4) : '--'}${imp}`, 'done');
       if (ev.best_prompt) {
         promptBox.textContent = ev.best_prompt;
         promptBox.style.display = 'block';

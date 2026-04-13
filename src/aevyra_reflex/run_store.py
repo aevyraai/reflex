@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -94,6 +95,11 @@ class CheckpointState:
 
     # Baseline eval (so we don't re-run it on resume)
     baseline: dict[str, Any] | None = None
+
+    # Best-val prompt tracking (distinct from best_train_prompt / best_prompt)
+    best_val_prompt: str | None = None
+    best_val_score: float = -1.0
+    best_val_iter: int = 0
 
     timestamp: str = ""
 
@@ -277,8 +283,11 @@ class RunStore:
             opt_config = config.get("optimizer_config", {})
 
             # Determine status
+            running_file = d / "running"
             if result_file.exists():
                 status = "completed"
+            elif running_file.exists() and _pid_alive(running_file):
+                status = "running"
             elif checkpoint_file.exists():
                 status = "interrupted"
             else:
@@ -363,12 +372,32 @@ class Run:
         return self.run_dir / "run.log.jsonl"
 
     @property
+    def running_path(self) -> Path:
+        return self.run_dir / "running"
+
+    @property
     def is_complete(self) -> bool:
         return self.result_path.exists()
 
     @property
+    def is_running(self) -> bool:
+        """True only if the process that owns this run is still alive."""
+        return self.running_path.exists() and _pid_alive(self.running_path)
+
+    @property
     def has_checkpoint(self) -> bool:
         return self.checkpoint_path.exists()
+
+    def mark_running(self) -> None:
+        """Write PID to sentinel file so the dashboard can distinguish running from interrupted."""
+        self.running_path.write_text(str(__import__("os").getpid()))
+
+    def mark_done(self) -> None:
+        """Remove the running sentinel (called on finish or error)."""
+        try:
+            self.running_path.unlink()
+        except FileNotFoundError:
+            pass
 
     def load_config(self) -> dict[str, Any]:
         """Load the run config."""
@@ -427,6 +456,9 @@ class Run:
             previous_reasoning=data.get("previous_reasoning", ""),
             strategy_state=data.get("strategy_state", {}),
             baseline=data.get("baseline"),
+            best_val_prompt=data.get("best_val_prompt"),
+            best_val_score=data.get("best_val_score", -1.0),
+            best_val_iter=data.get("best_val_iter", 0),
             timestamp=data.get("timestamp", ""),
         )
 
@@ -495,6 +527,16 @@ class Run:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _pid_alive(p: Path) -> bool:
+    """Return True if the PID stored in file p belongs to a live process."""
+    try:
+        pid = int(p.read_text().strip())
+        os.kill(pid, 0)  # signal 0 = existence check only
+        return True
+    except Exception:
+        return False
+
+
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     """Atomic JSON write — write to temp file then rename."""
     tmp = path.with_suffix(".tmp")
@@ -529,7 +571,7 @@ def _iteration_to_dict(state: IterationState) -> dict[str, Any]:
 
 
 def _checkpoint_to_dict(state: CheckpointState) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "run_id": state.run_id,
         "initial_prompt": state.initial_prompt,
         "current_prompt": state.current_prompt,
@@ -542,3 +584,10 @@ def _checkpoint_to_dict(state: CheckpointState) -> dict[str, Any]:
         "baseline": state.baseline,
         "timestamp": state.timestamp,
     }
+    if state.best_val_prompt is not None:
+        d["best_val_prompt"] = state.best_val_prompt
+    if state.best_val_score > -1.0:
+        d["best_val_score"] = state.best_val_score
+    if state.best_val_iter > 0:
+        d["best_val_iter"] = state.best_val_iter
+    return d

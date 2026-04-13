@@ -161,13 +161,21 @@ class AutoStrategy(Strategy):
             full_budget = phase_budgets.get(axis, 3)
             # For the phase that was in-progress, subtract already-done iterations
             iters_already_done = resume_phase_iters_done if (is_resuming and phase_idx == resume_phase_idx) else 0
-            phase_budget = min(
-                full_budget - iters_already_done,
-                config.max_iterations - global_iter,
-            )
-            if phase_budget <= 0:
+            remaining_in_phase = full_budget - iters_already_done
+            remaining_global = config.max_iterations - global_iter
+
+            if remaining_in_phase <= 0:
+                # This phase was already fully completed — skip to the next one
+                logger.info(f"[auto] Phase {phase_idx + 1} ({axis}) already complete, advancing to next phase.")
+                if is_resuming and phase_idx == resume_phase_idx:
+                    is_resuming = False
+                continue
+
+            if remaining_global <= 0:
                 logger.info("Global iteration budget exhausted.")
                 break
+
+            phase_budget = min(remaining_in_phase, remaining_global)
 
             if iters_already_done > 0:
                 logger.info(
@@ -201,6 +209,33 @@ class AutoStrategy(Strategy):
             sub_strategy = get_strategy(axis)()
             _phase_iters_this_run = 0
 
+            # Sub-strategy state (e.g. fewshot bootstrap candidates) — persisted
+            # alongside auto's own state so resume can skip completed sub-work.
+            # Seed from checkpoint if this is the phase we're resuming into.
+            _sub_state_box: list[dict] = [
+                rs.get("sub_strategy_state", {})
+                if (is_resuming and phase_idx == resume_phase_idx) else {}
+            ]
+
+            def _save_phase_checkpoint(_phase_idx: int = phase_idx) -> None:
+                if update_strategy_state:
+                    state: dict[str, Any] = {
+                        "phase_idx": _phase_idx,
+                        "phase_iters_done": iters_already_done + _phase_iters_this_run,
+                        "axes_used": list(axes_used),
+                        "phase_history": list(phase_history),
+                        "global_iter": global_iter,
+                        "last_phase_score": last_phase_score,
+                    }
+                    if _sub_state_box[0]:
+                        state["sub_strategy_state"] = _sub_state_box[0]
+                    update_strategy_state(state)
+
+            def _sub_update_strategy_state(sub_state: dict) -> None:
+                """Relay sub-strategy state updates into the checkpoint."""
+                _sub_state_box[0] = sub_state
+                _save_phase_checkpoint()
+
             def _phase_callback(record: IterationRecord, _axis: str = axis, _phase_idx: int = phase_idx) -> None:
                 # Re-number iterations globally
                 nonlocal global_iter, _phase_iters_this_run
@@ -212,20 +247,22 @@ class AutoStrategy(Strategy):
                     score=record.score,
                     scores_by_metric=record.scores_by_metric,
                     reasoning=f"[{_axis}] {record.reasoning}",
+                    eval_tokens=getattr(record, "eval_tokens", 0),
+                    reasoning_tokens=getattr(record, "reasoning_tokens", 0),
+                    val_score=getattr(record, "val_score", None),
+                    is_full_eval=getattr(record, "is_full_eval", False),
+                    change_summary=getattr(record, "change_summary", ""),
                 )
                 all_iterations.append(record)
-                # Persist phase state so resume can skip completed work
-                if update_strategy_state:
-                    update_strategy_state({
-                        "phase_idx": _phase_idx,
-                        "phase_iters_done": iters_already_done + _phase_iters_this_run,
-                        "axes_used": list(axes_used),
-                        "phase_history": list(phase_history),
-                        "global_iter": global_iter,
-                        "last_phase_score": last_phase_score,
-                    })
+                # Persist phase state (including sub-strategy state) so resume
+                # can skip completed work at both the auto and sub-strategy level.
+                _save_phase_checkpoint(_phase_idx)
                 if on_iteration:
                     on_iteration(record)
+
+            # Pass saved sub-strategy state back on resume so fewshot can skip
+            # bootstrap, PDO can restore its pool, etc.
+            sub_resume_state = _sub_state_box[0] if _sub_state_box[0] else None
 
             sub_result = sub_strategy.run(
                 initial_prompt=current_prompt,
@@ -235,6 +272,8 @@ class AutoStrategy(Strategy):
                 agent=agent,
                 config=sub_config,
                 on_iteration=_phase_callback,
+                resume_state=sub_resume_state,
+                update_strategy_state=_sub_update_strategy_state,
             )
 
             # If sub-strategy didn't report via callback, absorb its iterations
@@ -278,7 +317,9 @@ class AutoStrategy(Strategy):
             current_prompt = sub_result.best_prompt
 
             # Advance the checkpoint to the next phase so a crash between
-            # phases doesn't re-run this one
+            # phases doesn't re-run this one.
+            # Also reset val history so early stopping starts fresh — one
+            # phase's plateau shouldn't penalize the next strategy.
             if update_strategy_state:
                 update_strategy_state({
                     "phase_idx": phase_idx + 1,
@@ -287,6 +328,7 @@ class AutoStrategy(Strategy):
                     "phase_history": list(phase_history),
                     "global_iter": global_iter,
                     "last_phase_score": last_phase_score,
+                    "_reset_val_history": True,
                 })
 
             logger.info(

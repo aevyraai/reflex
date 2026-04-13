@@ -735,6 +735,11 @@ class PromptOptimizer:
                 branched_from=branched_from,
             )
 
+        # Mark run as actively running; cleared by mark_done() on normal exit,
+        # or left in place on crash (dashboard will then correctly show 'interrupted')
+        if run:
+            run.mark_running()
+
         # --- Step 1: Baseline eval (skip if resuming or branching with a known baseline) ---
         run_tag = f"[run {run.run_id}]" if run else "[run ?]"
         strategy_tag = f"[{self.config.strategy}]"
@@ -747,25 +752,50 @@ class PromptOptimizer:
                 run.save_baseline({
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
+                    "total_tokens": baseline.total_tokens,
                 })
         elif checkpoint and checkpoint.baseline:
             logger.info(f"{tag} Resuming — using saved baseline.")
             baseline = EvalSnapshot(
                 mean_score=checkpoint.baseline["mean_score"],
                 scores_by_metric=checkpoint.baseline.get("scores_by_metric", {}),
+                total_tokens=checkpoint.baseline.get("total_tokens", 0),
             )
         else:
             eval_runs = self.config.eval_runs
             eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
-            logger.info(f"{tag} Running baseline evaluation{eval_label}...")
+            n_test_samples = len(test_dataset.conversations) if test_dataset else "?"
+            logger.info(f"{tag} Running baseline eval on TEST SET{eval_label} ({n_test_samples} held-out samples)...")
             baseline = self._run_eval(initial_prompt, dataset=test_dataset)
             std_label = f" ± {baseline.std_score:.4f}" if baseline.std_score > 0 else ""
-            logger.info(f"{tag} Baseline score: {baseline.mean_score:.4f}{std_label}")
+            logger.info(f"{tag} Baseline TEST SET score: {baseline.mean_score:.4f}{std_label}")
             if run:
                 run.save_baseline({
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
+                    "total_tokens": baseline.total_tokens,
                 })
+
+        # Write an initial checkpoint immediately after the baseline so that
+        # a crash during the very first iteration (e.g. mid-variant-eval) still
+        # produces a resumable run.  Without this, checkpoint.json is never
+        # written until the first iteration completes and --resume can't find it.
+        if run and not checkpoint:
+            run.save_checkpoint(CheckpointState(
+                run_id=run.run_id,
+                initial_prompt=initial_prompt,
+                current_prompt=initial_prompt,
+                completed_iterations=0,
+                best_prompt=initial_prompt,
+                best_score=0.0,
+                score_trajectory=[],
+                previous_reasoning="",
+                strategy_state={},
+                baseline={
+                    "mean_score": baseline.mean_score,
+                    "scores_by_metric": baseline.scores_by_metric,
+                },
+            ))
 
         # --- Step 2: Optimization loop ---
         llm = LLM(
@@ -781,17 +811,60 @@ class PromptOptimizer:
         strategy_cls = get_strategy(self.config.strategy)
         strategy = strategy_cls()
 
+        # Restore per-iteration state from saved files when resuming.
+        # This reconstructs val_history (for early stopping), token totals (for accurate
+        # reporting), and best-val tracking — all of which start from zero otherwise.
+        _resumed_val_history: list[float] = []
+        _resumed_eval_tokens: int = 0
+        _resumed_reasoning_tokens: int = 0
+        if checkpoint and run:
+            for it in run.load_iterations():
+                if it.val_score is not None:
+                    _resumed_val_history.append(it.val_score)
+                _resumed_eval_tokens += it.eval_tokens
+                _resumed_reasoning_tokens += it.reasoning_tokens
+            if _resumed_eval_tokens or _resumed_reasoning_tokens:
+                def _fmtk(n: int) -> str:
+                    return f"{n / 1000:.1f}K" if n >= 1000 else str(n)
+                _baseline_tok = checkpoint.baseline.get("total_tokens", 0) if checkpoint and checkpoint.baseline else 0
+                logger.info(
+                    f"Tokens so far: eval={_fmtk(_baseline_tok + _resumed_eval_tokens)}  "
+                    f"reasoning={_fmtk(_resumed_reasoning_tokens)}"
+                )
+
+        # Restore best_val state from checkpoint (saved each iteration)
+        _resumed_best_val_prompt: str = checkpoint.best_val_prompt if (checkpoint and checkpoint.best_val_prompt) else (checkpoint.current_prompt if checkpoint else initial_prompt)
+        _resumed_best_val_score: float = checkpoint.best_val_score if checkpoint else -1.0
+        _resumed_best_val_iter: int = checkpoint.best_val_iter if checkpoint else 0
+        # Reconstruct the train score at the best-val iteration from saved iteration files
+        _resumed_best_val_train_score: float = -1.0
+        if checkpoint and run and _resumed_best_val_iter > 0:
+            for it in run.load_iterations():
+                if it.iteration == _resumed_best_val_iter:
+                    _resumed_best_val_train_score = it.score
+                    break
+
         # Shared mutable state for val tracking and early stopping
         _es: dict[str, Any] = {
-            "val_history": [],           # val score per iteration
+            "val_history": _resumed_val_history,  # val score per iteration (restored on resume)
             "iterations": [],            # IterationRecord objects collected
             "best_train_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
             "best_train_score": checkpoint.best_score if checkpoint else -1.0,
-            "best_val_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
-            "best_val_score": -1.0,
+            "best_val_prompt": _resumed_best_val_prompt,
+            "best_val_score": _resumed_best_val_score,
+            "best_val_train_score": _resumed_best_val_train_score,  # train score at best-val iter
+            "best_val_iter": _resumed_best_val_iter,  # global iteration number of best val
             "trajectory": list(checkpoint.score_trajectory) if checkpoint else [],
             "strategy_state": dict(checkpoint.strategy_state) if checkpoint and checkpoint.strategy_state else {},
+            "total_reasoning_tokens": _resumed_reasoning_tokens,  # seeded from saved iterations on resume
+            "total_eval_tokens": baseline.total_tokens + _resumed_eval_tokens,  # baseline + prior iterations
         }
+
+        def _fmt_k(n: int) -> str:
+            """Format token count as e.g. 1.2K."""
+            if n < 1000:
+                return str(n)
+            return f"{n / 1000:.1f}K"
 
         # Wrap the on_iteration callback to save checkpoints and run val eval
         def _checkpointing_callback(record):
@@ -811,21 +884,8 @@ class PromptOptimizer:
                     except Exception:
                         logger.exception(f"Callback {cb!r} raised in on_iteration")
             if run:
-                # Save iteration
-                run.save_iteration(IterationState(
-                    iteration=record.iteration,
-                    system_prompt=record.system_prompt,
-                    score=record.score,
-                    scores_by_metric=record.scores_by_metric,
-                    reasoning=record.reasoning,
-                    eval_tokens=getattr(record, "eval_tokens", 0),
-                    reasoning_tokens=getattr(record, "reasoning_tokens", 0),
-                    change_summary=getattr(record, "change_summary", ""),
-                    val_score=getattr(record, "val_score", None),
-                    is_full_eval=getattr(record, "is_full_eval", False),
-                ))
                 _es["trajectory"].append(record.score)
-                # Update checkpoint
+                # Update checkpoint (iteration saved after val eval below)
                 run.save_checkpoint(CheckpointState(
                     run_id=run.run_id,
                     initial_prompt=initial_prompt,
@@ -840,6 +900,9 @@ class PromptOptimizer:
                         "mean_score": baseline.mean_score,
                         "scores_by_metric": baseline.scores_by_metric,
                     },
+                    best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
+                    best_val_score=_es["best_val_score"],
+                    best_val_iter=_es["best_val_iter"],
                 ))
 
             # --- Validation eval + early stopping ---
@@ -852,35 +915,108 @@ class PromptOptimizer:
                 # Track best val prompt (the one least prone to overfitting)
                 if val_score >= _es["best_val_score"]:
                     _es["best_val_score"] = val_score
+                    _es["best_val_train_score"] = record.score
                     _es["best_val_prompt"] = record.system_prompt
+                    _es["best_val_iter"] = record.iteration
 
-                logger.info(
-                    f"{tag} Iteration {record.iteration}: "
-                    f"train={record.score:.4f}  val={val_score:.4f}"
-                )
+            # Save iteration after val eval so val_score is included
+            if run:
+                run.save_iteration(IterationState(
+                    iteration=record.iteration,
+                    system_prompt=record.system_prompt,
+                    score=record.score,
+                    scores_by_metric=record.scores_by_metric,
+                    reasoning=record.reasoning,
+                    eval_tokens=getattr(record, "eval_tokens", 0),
+                    reasoning_tokens=getattr(record, "reasoning_tokens", 0),
+                    change_summary=getattr(record, "change_summary", ""),
+                    val_score=getattr(record, "val_score", None),
+                    is_full_eval=getattr(record, "is_full_eval", False),
+                ))
+
+                r_tok = getattr(record, "reasoning_tokens", 0)
+                e_tok = getattr(record, "eval_tokens", 0)
+                _es["total_reasoning_tokens"] += r_tok
+                _es["total_eval_tokens"] += e_tok
+                tok_parts = []
+                if e_tok:
+                    tok_parts.append(f"eval={_fmt_k(e_tok)} (total {_fmt_k(_es['total_eval_tokens'])})")
+                if r_tok:
+                    tok_parts.append(f"reason={_fmt_k(r_tok)} (total {_fmt_k(_es['total_reasoning_tokens'])})")
+                tok_str = ("  " + "  ".join(tok_parts)) if tok_parts else ""
+                if val_dataset is not None:
+                    logger.info(
+                        f"{tag} Iteration {record.iteration}: "
+                        f"train={record.score:.4f}  val={val_score:.4f}{tok_str}"
+                    )
+                else:
+                    logger.info(
+                        f"{tag} Iteration {record.iteration}: "
+                        f"train={record.score:.4f}{tok_str}"
+                    )
 
                 # Check early stopping condition
                 patience = self.config.early_stopping_patience
                 if patience > 0 and len(_es["val_history"]) >= patience:
-                    best_val_overall = max(_es["val_history"])
-                    # Index of last best-val iteration
-                    best_val_idx = len(_es["val_history"]) - 1 - next(
+                    best_val_overall = _es["best_val_score"]
+                    best_val_iter = _es["best_val_iter"]
+                    # Count how many consecutive iterations have not beaten the best val
+                    iters_since_best = len(_es["val_history"]) - 1 - next(
                         i for i, v in enumerate(reversed(_es["val_history"]))
                         if v == best_val_overall
                     )
-                    iters_since_best = len(_es["val_history"]) - 1 - best_val_idx
                     if iters_since_best >= patience:
                         logger.info(
                             f"{tag} Early stopping triggered: val score has not improved "
                             f"for {patience} consecutive iteration(s) "
-                            f"(best val {best_val_overall:.4f} at iteration {best_val_idx + 1}). "
-                            f"Using prompt from iteration {best_val_idx + 1}."
+                            f"(best val {best_val_overall:.4f} at iteration {best_val_iter}). "
+                            f"Using prompt from iteration {best_val_iter}."
                         )
                         raise _EarlyStop()
 
         def _update_strategy_state(state: dict) -> None:
-            """Called by strategies to persist phase/iteration state into checkpoints."""
+            """Called by strategies to persist phase/iteration state into checkpoints.
+
+            Flushes immediately to disk so that bootstrap progress and other
+            between-iteration state (phase advances, sub-strategy state) survive
+            a crash before the next full iteration checkpoint is written.
+
+            Special key: ``_reset_val_history`` — if True, clears the val history
+            and best-val tracking so early stopping starts fresh for the new phase.
+            """
+            if state.pop("_reset_val_history", False):
+                _es["val_history"].clear()
+                _es["best_val_score"] = -1.0
+                _es["best_val_iter"] = 0
+                _es["best_val_prompt"] = _es["best_train_prompt"]
+                _es["best_val_train_score"] = -1.0
+                logger.debug("[early stopping] val history reset for new phase")
             _es["strategy_state"].update(state)
+            if run:
+                # Use the completed_iterations from the last real iteration so
+                # the resume banner stays accurate.
+                _completed = (
+                    _es["iterations"][-1].iteration if _es["iterations"]
+                    else (checkpoint.completed_iterations if checkpoint else 0)
+                )
+                run.save_checkpoint(CheckpointState(
+                    run_id=run.run_id,
+                    initial_prompt=initial_prompt,
+                    current_prompt=_es["best_train_prompt"],
+                    completed_iterations=_completed,
+                    best_prompt=_es["best_train_prompt"],
+                    best_score=_es["best_train_score"],
+                    score_trajectory=list(_es["trajectory"]),
+                    previous_reasoning=(_es["iterations"][-1].reasoning if _es["iterations"] else ""),
+                    strategy_state=dict(_es["strategy_state"]),
+                    baseline={
+                        "mean_score": baseline.mean_score,
+                        "scores_by_metric": baseline.scores_by_metric,
+                    },
+                    best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
+                    best_val_score=_es["best_val_score"],
+                    best_val_iter=_es["best_val_iter"],
+                ))
 
         _early_stopped = False
         try:
@@ -911,9 +1047,26 @@ class PromptOptimizer:
         # --- Step 3: Final verification eval (on held-out test set) ---
         eval_runs = self.config.eval_runs
         eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
-        logger.info(f"{tag} Running final verification{eval_label}...")
+        n_test_samples = len(test_dataset.conversations) if test_dataset else "?"
+        if val_dataset is not None:
+            _bv_iter = _es["best_val_iter"]
+            _bv_train = _es["best_val_train_score"]
+            _bv_val = _es["best_val_score"]
+            _bv_label = (
+                f"iter {_bv_iter}: train={_bv_train:.4f}, val={_bv_val:.4f}"
+                if _bv_train > -1.0 else f"iter {_bv_iter}: val={_bv_val:.4f}"
+            )
+            logger.info(
+                f"{tag} Running TEST SET eval{eval_label} on best-val prompt "
+                f"({_bv_label}) — {n_test_samples} held-out samples..."
+            )
+        else:
+            logger.info(f"{tag} Running TEST SET eval{eval_label} ({n_test_samples} held-out samples)...")
         final = self._run_eval(result.best_prompt, dataset=test_dataset)
-        logger.info(f"{tag} Final score: {final.mean_score:.4f}  (baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})")
+        logger.info(
+            f"{tag} TEST SET score: {final.mean_score:.4f}  "
+            f"(baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})"
+        )
 
         # Attach baseline, final, and strategy info to result
         result.baseline = baseline
@@ -950,13 +1103,16 @@ class PromptOptimizer:
             sig_label = "✓ significant" if is_sig else "✗ not significant"
             logger.info(f"{tag} Significance: p={p_val:.4f} ({sig_label} at α=0.05)")
 
-        # Accumulate token counts across all phases
+        # Accumulate token counts across all phases.
+        # _resumed_eval_tokens / _resumed_reasoning_tokens carry pre-interruption totals
+        # for resumed runs (0 for fresh runs), ensuring accuracy across multiple resumes.
         result.total_eval_tokens = (
             baseline.total_tokens
+            + _resumed_eval_tokens
             + sum(getattr(r, "eval_tokens", 0) for r in result.iterations)
             + final.total_tokens
         )
-        result.total_reasoning_tokens = llm.tokens_used
+        result.total_reasoning_tokens = _resumed_reasoning_tokens + llm.tokens_used
 
         # Save final result
         if run:
@@ -970,6 +1126,10 @@ class PromptOptimizer:
                     cb.on_run_end(result)
                 except Exception:
                     logger.exception(f"Callback {cb!r} raised in on_run_end")
+
+        # Clear running sentinel so dashboard shows 'completed' not 'running'
+        if run:
+            run.mark_done()
 
         return result
 

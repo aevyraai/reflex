@@ -52,10 +52,15 @@ class IterativeStrategy(Strategy):
     ) -> OptimizationResult:
         from aevyra_verdict.runner import RunConfig
 
-        current_prompt = initial_prompt
+        # Restore cross-iteration state on resume
+        rs = resume_state or {}
+        iters_done: int = rs.get("iters_done", 0)
+        current_prompt: str = rs.get("current_prompt", initial_prompt)
+        previous_reasoning: str = rs.get("previous_reasoning", "")
+        rewrite_log: list[dict] = list(rs.get("rewrite_log", []))
+        score_trajectory: list[float] = list(rs.get("score_trajectory", []))
+
         iterations: list[IterationRecord] = []
-        previous_reasoning = ""
-        rewrite_log: list[dict] = []  # causal history: what was tried and what happened
         label_free = not dataset.has_ideals()
 
         run_config = RunConfig(
@@ -67,9 +72,31 @@ class IterativeStrategy(Strategy):
         _batch_seed = getattr(config, "batch_seed", 42)
         _full_eval_steps = getattr(config, "full_eval_steps", 0)
 
-        for i in range(config.max_iterations):
+        # Mid-iteration checkpoint: saves eval result so a crash during the
+        # (cheap) agent call doesn't force re-running the (expensive) eval.
+        _iter_state: dict = rs.get("iterative_iter_state", {})
+
+        def _save_iter_state(state: dict, iters_done_override: int | None = None) -> None:
+            if update_strategy_state:
+                update_strategy_state({
+                    "iters_done": iters_done_override if iters_done_override is not None else i,
+                    "current_prompt": current_prompt,
+                    "previous_reasoning": previous_reasoning,
+                    "rewrite_log": rewrite_log,
+                    "score_trajectory": score_trajectory,
+                    "iterative_iter_state": state,
+                })
+
+        if iters_done > 0:
+            logger.info(f"[iterative] Resuming from iteration {iters_done + 1} (prompt: {len(current_prompt)} chars)")
+
+        for i in range(iters_done, config.max_iterations):
             tag = f"[iterative][iter {i + 1}/{config.max_iterations}]"
             logger.info(f"{tag} Starting")
+
+            # Check for saved mid-iteration state for this specific iteration
+            _saved = _iter_state if _iter_state.get("iter") == i else {}
+            _saved_stage = _saved.get("stage", "")
 
             # Determine whether this iteration should use the full training set
             # (periodic full-eval checkpoint) or a mini-batch sample.
@@ -80,35 +107,42 @@ class IterativeStrategy(Strategy):
             )
             effective_batch = 0 if is_full_eval else _batch_size
 
-            # 1. Run eval with current prompt
+            # 1. Run eval with current prompt (or restore from mid-iter checkpoint)
             reasoning_before = getattr(agent, "tokens_used", 0)
-            eval_label = "full-eval checkpoint" if is_full_eval else "eval"
-            logger.info(f"{tag} Running {eval_label}...")
-            score, failing_samples, eval_tokens = _run_eval(
-                prompt=current_prompt,
-                dataset=dataset,
-                providers=providers,
-                metrics=metrics,
-                run_config=run_config,
-                bottom_k=config.extra_kwargs.get("bottom_k", 10),
-                batch_size=effective_batch,
-                iteration_seed=_batch_seed + i,
-            )
+            if _saved_stage == "eval_done":
+                score = _saved["score"]
+                eval_tokens = _saved["eval_tokens"]
+                failing_samples = _saved["failing_samples"]
+                logger.info(f"{tag} Resuming — reusing saved eval (score: {score:.4f})")
+            else:
+                eval_label = "full-eval checkpoint" if is_full_eval else "eval"
+                logger.info(f"{tag} Running {eval_label}...")
+                score, failing_samples, eval_tokens = _run_eval(
+                    prompt=current_prompt,
+                    dataset=dataset,
+                    providers=providers,
+                    metrics=metrics,
+                    run_config=run_config,
+                    bottom_k=config.extra_kwargs.get("bottom_k", 10),
+                    batch_size=effective_batch,
+                    iteration_seed=_batch_seed + i,
+                )
+                _save_iter_state({"iter": i, "stage": "eval_done",
+                                  "score": score, "eval_tokens": eval_tokens,
+                                  "failing_samples": failing_samples})
 
             # 2. Record this iteration
             record = IterationRecord(
                 iteration=i + 1,
                 system_prompt=current_prompt,
                 score=score,
-                reasoning=previous_reasoning,
+                reasoning=previous_reasoning,  # reasoning that produced this prompt
                 eval_tokens=eval_tokens,
                 is_full_eval=is_full_eval,
             )
             iterations.append(record)
-            if on_iteration:
-                on_iteration(record)
 
-            trajectory = [r.score for r in iterations]
+            score_trajectory.append(score)
             logger.info(f"{tag} Score: {score:.4f}  target: {config.score_threshold:.4f}  failing samples: {len(failing_samples)}")
 
             # 3. Check convergence
@@ -123,7 +157,7 @@ class IterativeStrategy(Strategy):
 
             # 4. Ask reasoning model to diagnose and revise
             reasoning_before = getattr(agent, "tokens_used", 0)
-            if i == 0:
+            if i == 0 and not rewrite_log:
                 logger.info(f"{tag} Diagnosing failures (first iteration)...")
                 revised, reasoning, change_summary = agent.diagnose_and_revise(
                     system_prompt=current_prompt,
@@ -135,7 +169,7 @@ class IterativeStrategy(Strategy):
                 revised, reasoning, change_summary = agent.refine(
                     system_prompt=current_prompt,
                     iteration=i + 1,
-                    score_trajectory=trajectory,
+                    score_trajectory=score_trajectory,
                     mean_score=score,
                     target_score=config.score_threshold,
                     failing_samples=failing_samples,
@@ -147,7 +181,7 @@ class IterativeStrategy(Strategy):
             record.change_summary = change_summary
 
             # Update the causal rewrite log with this iteration's outcome
-            prev_score = iterations[-2].score if len(iterations) >= 2 else score
+            prev_score = score_trajectory[-2] if len(score_trajectory) >= 2 else score
             delta = score - prev_score
             rewrite_log.append({
                 "iteration": i + 1,
@@ -156,11 +190,22 @@ class IterativeStrategy(Strategy):
                 "change_summary": change_summary,
             })
 
+            # Update the record with the reasoning generated this iteration
+            # (what Claude said after seeing this score — produces next prompt)
+            record.reasoning = reasoning
+            if on_iteration:
+                on_iteration(record)
+
             previous_reasoning = reasoning
             current_prompt = revised
             logger.info(f"{tag} Revised prompt: {len(revised)} chars")
             if change_summary:
                 logger.info(f"{tag} Change: {change_summary}")
+
+            # Clear mid-iter checkpoint and persist final cross-iteration state.
+            # current_prompt / previous_reasoning are already updated above.
+            _iter_state = {}
+            _save_iter_state({}, iters_done_override=i + 1)
 
         # Exhausted max_iterations
         best = max(iterations, key=lambda r: r.score)

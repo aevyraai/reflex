@@ -2,10 +2,11 @@
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
 
-Agentic prompt optimization. Reflex takes your dataset and prompt, runs evals, diagnoses why
-scores are falling short, and rewrites the prompt — iterating until it converges. Works for
-improving an existing prompt, migrating one to a new model, or closing the gap to your best
-model's score. No manual prompt engineering required.
+Agentic prompt optimization built for production workloads. Reflex takes your dataset and
+prompt, runs evals, diagnoses why scores are falling short, and rewrites the prompt — iterating
+until it converges. Runs can be interrupted and resumed at any point without losing work, and
+every token spent is tracked across sessions so you always know the cost. Works for improving
+an existing prompt, migrating one to a new model, or closing the gap to your best model's score.
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
@@ -62,6 +63,21 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 patterns, and adaptively picks the right optimization technique at each step.
 Each iteration the reasoning model explains *why* it made the change — you
 learn from the run, not just get an output.
+
+**Crash-safe resumption.** Every iteration is checkpointed to disk as it completes.
+Kill the process, restart the machine, lose your connection — `--resume` picks up
+exactly where it left off. Val history, best-prompt selection, and token totals are
+all restored correctly across as many interruptions as you need.
+
+**Full token accounting.** Eval tokens and reasoning tokens are tracked per iteration
+and accumulated across sessions, including resumed runs. The final results show the
+true total cost of the optimization, not just the last session. Per-iteration
+breakdown is visible live in the CLI and in the dashboard.
+
+**Overfitting protection.** An optional validation split monitors generalization
+throughout training. The best prompt is selected against the val set, not the
+training score — so the final test eval reflects real-world performance rather than
+a prompt tuned to the specific examples it was optimized on.
 
 ## Install
 
@@ -252,6 +268,28 @@ OLLAMA_NUM_PARALLEL=4 aevyra-reflex optimize dataset.jsonl prompt.md -m local/ll
 
 If `OLLAMA_NUM_PARALLEL` is not set, reflex auto-detects and falls back to
 sequential execution with a warning.
+
+## Dataset formats
+
+Reflex accepts JSONL and CSV files. JSONL auto-detects OpenAI, ShareGPT, and Alpaca
+schemas. For non-standard field names or CSV files, use `--input-field` and `--output-field`:
+
+```bash
+# CSV with default column names (input, ideal)
+aevyra-reflex optimize data.csv prompt.md -m local/llama3.1:8b
+
+# CSV with custom column names
+aevyra-reflex optimize data.csv prompt.md -m local/llama3.1:8b \
+  --input-field article --output-field summary
+
+# JSONL with non-standard field names
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b \
+  --input-field question --output-field answer
+
+# Label-free (no reference answers — use --judge instead of --metric)
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b \
+  --input-field prompt --judge openai/gpt-4o
+```
 
 ## Run persistence and resume
 
