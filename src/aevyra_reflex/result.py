@@ -95,6 +95,9 @@ class OptimizationResult:
     strategy_name: str = ""
     phase_history: list[dict] = field(default_factory=list)  # auto strategy phases
 
+    # Timing (filled by optimizer)
+    duration_seconds: float = 0.0
+
     @property
     def score_trajectory(self) -> list[float]:
         return [r.score for r in self.iterations]
@@ -164,6 +167,15 @@ class OptimizationResult:
                 def _fmt_tok(n): return f"{n/1e6:.2f}M" if n >= 1_000_000 else (f"{n/1000:.1f}K" if n >= 1000 else str(n))
                 lines.append(f"  Eval tokens      : {_fmt_tok(self.total_eval_tokens)}")
                 lines.append(f"  Reasoning tokens : {_fmt_tok(self.total_reasoning_tokens)}")
+            if self.duration_seconds > 0:
+                _dm, _ds = divmod(int(self.duration_seconds), 60)
+                _dh, _dm = divmod(_dm, 60)
+                _dlabel = (
+                    f"{_dh}h {_dm}m {_ds}s" if _dh
+                    else f"{_dm}m {_ds}s" if _dm
+                    else f"{_ds}s"
+                )
+                lines.append(f"  Duration         : {_dlabel}")
             lines.append("-" * 52)
 
             if self.baseline.scores_by_metric or self.final.scores_by_metric:

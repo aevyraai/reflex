@@ -1158,9 +1158,10 @@ class PromptOptimizer:
         result.total_reasoning_tokens = _resumed_reasoning_tokens + llm.tokens_used
 
         # Save final result
+        _total_seconds = _prior_duration_seconds + _time.monotonic() - _run_start_monotonic
+        result.duration_seconds = round(_total_seconds, 2)
         if run:
             result_dict = result.to_dict()
-            _total_seconds = _prior_duration_seconds + _time.monotonic() - _run_start_monotonic
             result_dict["duration_seconds"] = round(_total_seconds, 2)
             result_dict["started_at"] = _run_started_at
             run.save_result(result_dict)
