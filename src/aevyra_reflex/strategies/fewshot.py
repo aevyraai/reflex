@@ -376,58 +376,67 @@ def _bootstrap_exemplars(
             runner.add_metric(m)
         return runner
 
+    # Collect remaining (not-yet-scored) conversations in order
+    remaining: list[Any] = []
+    for convo in dataset.conversations:
+        if (convo.last_user_message or "") not in already_scored_inputs:
+            messages = list(convo.messages)
+            if messages and messages[0].role == "system":
+                messages[0] = Message(role="system", content=prompt)
+            else:
+                messages.insert(0, Message(role="system", content=prompt))
+            remaining.append(Conversation(
+                messages=messages,
+                ideal=convo.ideal,
+                metadata=convo.metadata,
+            ))
+
     n_total = len(dataset.conversations)
-    n_remaining = sum(
-        1 for convo in dataset.conversations
-        if (convo.last_user_message or "") not in already_scored_inputs
-    )
+    n_done = n_total - len(remaining)
 
     from tqdm import tqdm
-    pbar = tqdm(total=n_total, initial=n_total - n_remaining)
 
-    for convo in dataset.conversations:
-        user_input = convo.last_user_message or ""
-        if user_input in already_scored_inputs:
-            continue  # already scored in a previous (interrupted) session
+    if not remaining:
+        # All samples already scored (full resume) — nothing to do
+        pass
+    else:
+        # Run all remaining samples in parallel batches.
+        # Batch size = max_workers so we checkpoint after every batch while
+        # still keeping requests concurrent within each batch.
+        batch_size = run_config.max_workers or 4
+        pbar = tqdm(total=n_total, initial=n_done)
 
-        # Inject system prompt into a single-sample dataset
-        messages = list(convo.messages)
-        if messages and messages[0].role == "system":
-            messages[0] = Message(role="system", content=prompt)
-        else:
-            messages.insert(0, Message(role="system", content=prompt))
+        for batch_start in range(0, len(remaining), batch_size):
+            batch = remaining[batch_start: batch_start + batch_size]
+            batch_ds = Dataset(conversations=batch)
 
-        single_ds = Dataset(conversations=[Conversation(
-            messages=messages,
-            ideal=convo.ideal,
-            metadata=convo.metadata,
-        )])
+            runner = _make_runner()
+            results = runner.run(batch_ds, show_progress=False)
+            total_eval_tokens += sum(mr.total_tokens() for mr in results.model_results.values())
 
-        runner = _make_runner()
-        results = runner.run(single_ds, show_progress=False)
-        total_eval_tokens += sum(mr.total_tokens() for mr in results.model_results.values())
+            for _label, model_result in results.model_results.items():
+                for i, convo in enumerate(batch):
+                    user_input = convo.last_user_message or ""
+                    score = _mean_score(model_result.scores[i])
+                    completion = model_result.completions[i]
+                    output = convo.ideal if convo.ideal else (
+                        completion.text if completion else ""
+                    )
+                    if user_input and output:
+                        scored_samples.append({
+                            "input": user_input,
+                            "output": output,
+                            "score": score,
+                        })
+                    already_scored_inputs.add(user_input)
 
-        for _model_label, model_result in results.model_results.items():
-            score = _mean_score(model_result.scores[0])
-            completion = model_result.completions[0]
-            output = convo.ideal if convo.ideal else (
-                completion.text if completion else ""
-            )
-            if user_input and output:
-                scored_samples.append({
-                    "input": user_input,
-                    "output": output,
-                    "score": score,
-                })
+            pbar.update(len(batch))
 
-        already_scored_inputs.add(user_input)
-        pbar.update(1)
+            # Checkpoint after each batch so resume can skip already-scored ones
+            if on_sample:
+                on_sample(list(scored_samples))
 
-        # Checkpoint after every sample so resume can skip already-scored ones
-        if on_sample:
-            on_sample(list(scored_samples))
-
-    pbar.close()
+        pbar.close()
 
     # Sort by score descending — top scorers make the best exemplars
     scored_samples.sort(key=lambda s: s["score"], reverse=True)
