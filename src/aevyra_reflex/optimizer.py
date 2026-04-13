@@ -776,13 +776,28 @@ class PromptOptimizer:
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
                     "total_tokens": baseline.total_tokens,
+                    "samples": [
+                        {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                        for s in baseline.samples
+                    ],
                 })
         elif checkpoint and checkpoint.baseline:
             logger.info(f"{tag} Resuming — using saved baseline.")
+            from aevyra_reflex.result import SampleSnapshot
+            raw_samples = checkpoint.baseline.get("samples", [])
             baseline = EvalSnapshot(
                 mean_score=checkpoint.baseline["mean_score"],
                 scores_by_metric=checkpoint.baseline.get("scores_by_metric", {}),
                 total_tokens=checkpoint.baseline.get("total_tokens", 0),
+                samples=[
+                    SampleSnapshot(
+                        input=s.get("input", ""),
+                        response=s.get("response", ""),
+                        ideal=s.get("ideal", ""),
+                        score=s.get("score", 0.0),
+                    )
+                    for s in raw_samples
+                ],
             )
         else:
             eval_runs = self.config.eval_runs
@@ -797,6 +812,10 @@ class PromptOptimizer:
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
                     "total_tokens": baseline.total_tokens,
+                    "samples": [
+                        {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                        for s in baseline.samples
+                    ],
                 })
 
         # Write an initial checkpoint immediately after the baseline so that

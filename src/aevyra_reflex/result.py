@@ -155,7 +155,9 @@ class OptimizationResult:
             if self.p_value is not None:
                 sig_mark = "✓ significant" if self.is_significant else "✗ not significant"
                 lines.append(f"  Significance     : p={self.p_value:.4f}  {sig_mark} (α=0.05, paired test)")
-            elif self.baseline.samples and len(self.baseline.samples) < 2:
+            elif not self.baseline.samples or not self.final.samples:
+                lines.append("  Significance     : n/a (per-sample scores not available)")
+            elif len(self.baseline.samples) < 2:
                 lines.append("  Significance     : n/a (need ≥2 samples)")
             else:
                 lines.append("  Significance     : install scipy for p-values")
@@ -671,6 +673,10 @@ class OptimizationResult:
                 "scores_by_metric": self.baseline.scores_by_metric,
                 "system_prompt": self.baseline.system_prompt,
                 "total_tokens": self.baseline.total_tokens,
+                "samples": [
+                    {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                    for s in self.baseline.samples
+                ],
             }
         if self.final:
             d["final"] = {
@@ -680,6 +686,10 @@ class OptimizationResult:
                 "scores_by_metric": self.final.scores_by_metric,
                 "system_prompt": self.final.system_prompt,
                 "total_tokens": self.final.total_tokens,
+                "samples": [
+                    {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                    for s in self.final.samples
+                ],
             }
         if self.train_size:
             d["train_size"] = self.train_size
