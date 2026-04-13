@@ -599,6 +599,7 @@ class PromptOptimizer:
         callbacks: list[Any] | None = None,
         baseline_override: "EvalSnapshot | None" = None,
         branched_from: dict[str, Any] | None = None,
+        prior_duration_seconds: float = 0.0,
     ) -> OptimizationResult:
         """Run the full optimization workflow: baseline → optimize → verify.
 
@@ -616,6 +617,11 @@ class PromptOptimizer:
                                existing run to avoid re-running the baseline.
             branched_from: Optional dict with ``run_id`` and ``iteration`` keys
                            passed to RunStore.create_run() for lineage tracking.
+            prior_duration_seconds: Elapsed time already spent on this run before
+                                    this session started (e.g. from the parent run
+                                    up to the branching point). Added to every
+                                    elapsed/duration measurement so branch runs
+                                    show cumulative wall time including parent work.
 
         Returns:
             OptimizationResult with baseline/final scores and full history.
@@ -715,8 +721,10 @@ class PromptOptimizer:
 
         run: Run | None = None
         checkpoint: CheckpointState | None = None
-        # Cumulative wall time from prior sessions (0 for fresh runs).
-        _prior_duration_seconds: float = 0.0
+        # Cumulative wall time from prior sessions / parent branch work.
+        # For branch runs this is seeded from the parent iteration's elapsed_seconds.
+        # For resumed runs the checkpoint value takes precedence (it's always >= this).
+        _prior_duration_seconds: float = prior_duration_seconds
 
         if resume_run is not None:
             run = resume_run
@@ -939,6 +947,7 @@ class PromptOptimizer:
 
             # Save iteration after val eval so val_score is included
             if run:
+                _iter_elapsed = _prior_duration_seconds + _time.monotonic() - _run_start_monotonic
                 run.save_iteration(IterationState(
                     iteration=record.iteration,
                     system_prompt=record.system_prompt,
@@ -950,6 +959,7 @@ class PromptOptimizer:
                     change_summary=getattr(record, "change_summary", ""),
                     val_score=getattr(record, "val_score", None),
                     is_full_eval=getattr(record, "is_full_eval", False),
+                    elapsed_seconds=round(_iter_elapsed, 1),
                 ))
 
                 r_tok = getattr(record, "reasoning_tokens", 0)
@@ -962,15 +972,22 @@ class PromptOptimizer:
                 if r_tok:
                     tok_parts.append(f"reason={_fmt_k(r_tok)} (total {_fmt_k(_es['total_reasoning_tokens'])})")
                 tok_str = ("  " + "  ".join(tok_parts)) if tok_parts else ""
+                _el_m, _el_s = divmod(int(_iter_elapsed), 60)
+                _el_h, _el_m = divmod(_el_m, 60)
+                _el_label = (
+                    f"{_el_h}h {_el_m}m {_el_s}s" if _el_h
+                    else f"{_el_m}m {_el_s}s" if _el_m
+                    else f"{_el_s}s"
+                )
                 if val_dataset is not None:
                     logger.info(
                         f"{tag} Iteration {record.iteration}: "
-                        f"train={record.score:.4f}  val={val_score:.4f}{tok_str}"
+                        f"train={record.score:.4f}  val={val_score:.4f}{tok_str}  [{_el_label}]"
                     )
                 else:
                     logger.info(
                         f"{tag} Iteration {record.iteration}: "
-                        f"train={record.score:.4f}{tok_str}"
+                        f"train={record.score:.4f}{tok_str}  [{_el_label}]"
                     )
 
                 # Check early stopping condition

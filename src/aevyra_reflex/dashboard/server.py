@@ -241,6 +241,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
         branch_meta = config_dict.get("_branch")
         baseline_override = None
         branched_from = None
+        branch_prior_duration: float = 0.0
         if branch_meta:
             from aevyra_reflex.result import EvalSnapshot
             parent_bl = branch_meta["baseline"]
@@ -252,6 +253,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
                 "run_id": branch_meta["parent_run_id"],
                 "iteration": branch_meta["parent_iteration"],
             }
+            branch_prior_duration = float(branch_meta.get("prior_duration_seconds", 0.0))
             push("queued", message=(
                 f"Branch from run {branch_meta['parent_run_id']} "
                 f"iter {branch_meta['parent_iteration']} — "
@@ -282,6 +284,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             run_store=store,
             baseline_override=baseline_override,
             branched_from=branched_from,
+            prior_duration_seconds=branch_prior_duration,
         )
 
         # Grab the run_id from the latest entry in the store
@@ -594,6 +597,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 "parent_run_id": parent_run_id,
                 "parent_iteration": int(parent_iteration),
                 "baseline": parent_baseline,
+                "prior_duration_seconds": getattr(target, "elapsed_seconds", 0.0),
             },
         }
 

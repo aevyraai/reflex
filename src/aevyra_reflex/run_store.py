@@ -74,6 +74,7 @@ class IterationState:
     change_summary: str = ""   # one-liner: what the reasoning model changed this iteration
     val_score: float | None = None  # validation-set score this iteration (None when val_ratio=0)
     is_full_eval: bool = False      # True when scored on full training set (mini-batch checkpoint)
+    elapsed_seconds: float = 0.0   # cumulative wall time from run start (including prior sessions)
     timestamp: str = ""
 
 
