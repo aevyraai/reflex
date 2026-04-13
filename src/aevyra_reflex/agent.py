@@ -261,11 +261,27 @@ def _resolve_agent_backend(
         if p == "ollama":
             url = base_url or "http://localhost:11434"
             return _OllamaBackend(model, max_tokens, base_url=url)
-        # Check if it's a known alias
+        # Check agent-level prefix table (openrouter, groq, together, deepinfra)
+        if p in _MODEL_PREFIX_PROVIDERS:
+            info = _MODEL_PREFIX_PROVIDERS[p]
+            resolved_url = base_url or info["base_url"]
+            resolved_key = api_key or os.environ.get(info["env_key"])
+            if not resolved_key:
+                raise ValueError(
+                    f"No API key found for '{p}'. "
+                    f"Set the {info['env_key']} environment variable or pass --reasoning-api-key."
+                )
+            return _OpenAIBackend(model, max_tokens, api_key=resolved_key, base_url=resolved_url)
+        # Check optimizer-level aliases (gemini, together, etc.)
         if p in PROVIDER_ALIASES:
             alias = PROVIDER_ALIASES[p]
             resolved_url = base_url or alias["base_url"]
-            resolved_key = api_key or os.environ.get(alias["env_key"]) or os.environ.get("OPENAI_API_KEY")
+            resolved_key = api_key or os.environ.get(alias["env_key"])
+            if not resolved_key:
+                raise ValueError(
+                    f"No API key found for '{p}'. "
+                    f"Set the {alias['env_key']} environment variable or pass --reasoning-api-key."
+                )
             return _OpenAIBackend(model, max_tokens, api_key=resolved_key, base_url=resolved_url)
         # Generic openai-compatible
         return _OpenAIBackend(model, max_tokens, api_key=api_key, base_url=base_url)
