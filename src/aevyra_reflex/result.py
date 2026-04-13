@@ -159,6 +159,8 @@ class OptimizationResult:
                 lines.append("  Significance     : n/a (per-sample scores not available)")
             elif len(self.baseline.samples) < 2:
                 lines.append("  Significance     : n/a (need ≥2 samples)")
+            elif len(self.baseline.samples) < 8:
+                lines.append(f"  Significance     : n/a (only {len(self.baseline.samples)} test samples — too few for a reliable test)")
             else:
                 lines.append("  Significance     : install scipy for p-values")
             lines.append(f"  Iterations       : {len(self.iterations)}")

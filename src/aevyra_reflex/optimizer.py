@@ -694,6 +694,23 @@ class PromptOptimizer:
             n_val = 0
             n_test = n_train
 
+        # Warn when the split produces unusably small partitions
+        _total_n = len(self._dataset.conversations)
+        if n_train < 10 and train_ratio < 1.0:
+            logger.warning(
+                "Training set is very small (%d examples). With only %d examples the "
+                "optimizer has little signal to work from. Consider using --train-split 1.0 "
+                "to disable splitting, or collecting more data (aim for ≥30 train examples).",
+                n_train, n_train,
+            )
+        if n_test < 8 and train_ratio < 1.0:
+            logger.warning(
+                "Test set is very small (%d examples). Scores will be noisy and the "
+                "significance test won't be reliable. Aim for ≥20 test examples, or use "
+                "--train-split 1.0 to skip the split on small datasets.",
+                n_test,
+            )
+
         if self.config.batch_size > 0:
             effective_batch = min(self.config.batch_size, n_train)
             logger.info(
@@ -1442,10 +1459,15 @@ class PromptOptimizer:
         import math
 
         if not baseline.samples or not final.samples:
+            logger.debug(
+                "Significance test skipped: baseline_samples=%d final_samples=%d",
+                len(baseline.samples), len(final.samples),
+            )
             return None, None
 
         n = min(len(baseline.samples), len(final.samples))
         if n < 2:
+            logger.debug("Significance test skipped: only %d paired samples (need ≥2)", n)
             return None, None
 
         b_scores = [s.score for s in baseline.samples[:n]]
@@ -1454,6 +1476,7 @@ class PromptOptimizer:
 
         # All identical — test undefined
         if all(d == 0.0 for d in diffs):
+            logger.debug("Significance test skipped: all per-sample differences are zero")
             return None, None
 
         # --- Try scipy Wilcoxon signed-rank test (non-parametric, no normality assumption) ---
@@ -1463,11 +1486,16 @@ class PromptOptimizer:
             return float(p_value), bool(p_value < 0.05)
         except ImportError:
             pass
+        except Exception as exc:
+            # Wilcoxon can raise ValueError with small n or degenerate differences
+            # (e.g. too many ties, only 1 non-zero diff). Fall through to t-test.
+            logger.debug("Wilcoxon test failed (%s: %s), falling back to t-test", type(exc).__name__, exc)
 
         # --- Fallback: manual paired t-test ---
         mean_d = sum(diffs) / n
         var_d = sum((d - mean_d) ** 2 for d in diffs) / (n - 1) if n > 1 else 0.0
         if var_d == 0.0:
+            logger.debug("Significance test skipped: zero variance in differences")
             return None, None
         t_stat = mean_d / math.sqrt(var_d / n)
 
