@@ -206,6 +206,28 @@ class _OllamaBackend:
 # Backend resolution
 # ---------------------------------------------------------------------------
 
+# Provider prefixes that can appear in model names (e.g. "openrouter/qwen/qwen3-8b").
+# Maps prefix → (base_url, env_key).  Checked before model-name heuristics.
+_MODEL_PREFIX_PROVIDERS: dict[str, dict[str, str]] = {
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "env_key": "OPENROUTER_API_KEY",
+    },
+    "together": {
+        "base_url": "https://api.together.xyz/v1",
+        "env_key": "TOGETHER_API_KEY",
+    },
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "env_key": "GROQ_API_KEY",
+    },
+    "deepinfra": {
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "env_key": "DEEPINFRA_API_KEY",
+    },
+}
+
+
 def _resolve_agent_backend(
     model: str,
     max_tokens: int = 4096,
@@ -218,12 +240,13 @@ def _resolve_agent_backend(
     Resolution order:
         1. Explicit provider kwarg: "anthropic", "openai", "ollama", or any
            alias in PROVIDER_ALIASES (e.g. "gemini", "openrouter", "groq")
-        2. Model name heuristics:
+        2. Model name prefix: "openrouter/model", "groq/model", etc.
+        3. Model name heuristics:
            - "claude-*"         → Anthropic
            - "gemini-*"         → OpenAI-compat against Google's v1beta endpoint
            - "ollama/*" or no / → Ollama  (if base_url looks local or default)
            - everything else    → OpenAI-compatible
-        3. base_url heuristics:
+        4. base_url heuristics:
            - contains "localhost" or "127.0.0.1" + port 11434 → Ollama
            - any other base_url                                → OpenAI-compatible
     """
@@ -246,6 +269,20 @@ def _resolve_agent_backend(
             return _OpenAIBackend(model, max_tokens, api_key=resolved_key, base_url=resolved_url)
         # Generic openai-compatible
         return _OpenAIBackend(model, max_tokens, api_key=api_key, base_url=base_url)
+
+    # Model-name prefix: "openrouter/qwen/qwen3-8b", "groq/llama3-8b", etc.
+    first_segment = model.split("/")[0].lower()
+    if first_segment in _MODEL_PREFIX_PROVIDERS and not base_url:
+        info = _MODEL_PREFIX_PROVIDERS[first_segment]
+        # Strip the provider prefix — the rest is the actual model name on that provider
+        actual_model = model[len(first_segment) + 1:]
+        resolved_key = api_key or os.environ.get(info["env_key"])
+        if not resolved_key:
+            raise ValueError(
+                f"No API key found for '{first_segment}'. "
+                f"Set the {info['env_key']} environment variable or pass --reasoning-api-key."
+            )
+        return _OpenAIBackend(actual_model, max_tokens, api_key=resolved_key, base_url=info["base_url"])
 
     # Heuristics from model name
     if model.startswith("claude"):
