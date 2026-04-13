@@ -708,6 +708,11 @@ class PromptOptimizer:
             Run,
         )
 
+        import time as _time
+        from datetime import datetime, timezone
+        _run_start_monotonic = _time.monotonic()
+        _run_started_at = datetime.now(timezone.utc).isoformat()
+
         run: Run | None = None
         checkpoint: CheckpointState | None = None
 
@@ -1130,7 +1135,10 @@ class PromptOptimizer:
 
         # Save final result
         if run:
-            run.save_result(result.to_dict())
+            result_dict = result.to_dict()
+            result_dict["duration_seconds"] = round(_time.monotonic() - _run_start_monotonic, 2)
+            result_dict["started_at"] = _run_started_at
+            run.save_result(result_dict)
             logger.info(f"Run {run.run_id} saved to {run.run_dir}")
 
         # Fire on_run_end
