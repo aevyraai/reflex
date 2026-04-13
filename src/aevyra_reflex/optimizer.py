@@ -110,13 +110,13 @@ def parse_verdict_results(
 # Provider aliases — OpenAI-compatible services that can be used with -m
 # ---------------------------------------------------------------------------
 # Maps alias → (base_url, env_var_for_api_key)
-# When a user writes `-m openrouter/meta-llama/llama-3.1-8b-instruct`, we
-# resolve "openrouter" to the openai provider with the right base_url and key.
+# When a user writes `-m together/meta-llama/llama-3.1-8b-instruct`, we
+# resolve "together" to the openai provider with the right base_url and key.
+#
+# Note: "openrouter" is intentionally NOT listed here — verdict has a native
+# OpenRouterProvider that reads OPENROUTER_API_KEY directly. Aliasing it to
+# the openai provider caused confusing "OPENAI_API_KEY not set" errors.
 PROVIDER_ALIASES: dict[str, dict[str, str]] = {
-    "openrouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "env_key": "OPENROUTER_API_KEY",
-    },
     "together": {
         "base_url": "https://api.together.xyz/v1",
         "env_key": "TOGETHER_API_KEY",
