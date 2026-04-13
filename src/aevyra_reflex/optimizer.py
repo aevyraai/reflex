@@ -725,7 +725,8 @@ class PromptOptimizer:
             config_dict = asdict(self.config)
             # Persist the eval model names so the dashboard and CLI can show them
             config_dict["_cli_models"] = [
-                p.get("model", p.get("label", "")) for p in self._providers
+                f"{p['provider_name']}/{p.get('model', p.get('label', ''))}"
+                for p in self._providers
             ]
             run = run_store.create_run(
                 config=config_dict,
