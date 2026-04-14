@@ -1,0 +1,324 @@
+---
+title: "Tutorial: format-compliance optimization"
+description: Teach a model to produce strict 3-sentence executive briefs from security incident reports — a complete walkthrough with real run logs.
+---
+
+This tutorial walks through a real reflex run from start to finish. The task is
+deceptively simple: take a structured security incident report and produce an
+executive brief. The catch is the brief must follow an exact format — exactly 3
+sentences, each covering a specific piece of information. A generic "summarize
+this" prompt gets the facts right but ignores the format completely. Reflex
+diagnoses the gap and fixes it automatically.
+
+## The problem
+
+A security team needs executive briefs from incident reports. The ideal format
+is strict:
+
+- **Sentence 1** — what happened and the attack vector
+- **Sentence 2** — duration, affected count, and financial cost
+- **Sentence 3** — containment action and longer-term controls
+
+The starting prompt is intentionally vague:
+
+```text title="security_incidents_prompt.md"
+Summarize this security incident report.
+```
+
+With no format guidance, the model produces free-form prose, markdown bullets,
+and section headers — readable, but useless to an executive who needs a
+scannable 3-sentence brief.
+
+## The dataset
+
+100 synthetic security incident reports across 15 incident types (ransomware,
+phishing, credential stuffing, supply chain, API key leaks, and more). Each
+report is 200–400 words of structured plain text; each ideal is a tight 3-sentence
+brief. The dataset is split automatically: 45 train / 20 val / 35 test.
+
+```bash
+# Generate the dataset (included in examples/)
+python examples/create_security_incidents.py
+```
+
+## The judge
+
+Instead of ROUGE (which measures word overlap, not format compliance), this run
+uses an LLM judge with a custom rubric:
+
+```text title="security_incidents_judge.md"
+Score the response from 1 to 5:
+
+5 — Exactly 3 sentences covering what/impact/remediation. Factually consistent. Concise.
+4 — Exactly 3 sentences with minor gaps (e.g. financial cost omitted).
+3 — Wrong number of sentences OR key details missing from the right sentences.
+2 — Free-form prose with correct facts but ignores 3-sentence structure.
+1 — Missing critical content or fabricated details.
+```
+
+ROUGE would give a verbose markdown-bulleted response a reasonable score because
+it shares many words with the ideal. The LLM judge penalizes it hard — a
+score of 2 at best.
+
+## Running the optimization
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+
+aevyra-reflex optimize examples/security_incidents.jsonl \
+  examples/security_incidents_prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --judge openrouter/qwen/qwen3-8b \
+  --judge-criteria examples/security_incidents_judge.md \
+  --max-workers 4 \
+  -o examples/security_incidents_best_prompt.md
+```
+
+The model being optimized is Llama 3.1 8B via OpenRouter. The judge is Qwen3
+8B, also via OpenRouter. Both are small, fast, cheap models — the reasoning
+that diagnoses failures and rewrites the prompt runs on Claude Sonnet by default.
+
+## What happened: phase by phase
+
+The `auto` strategy ran 4 phases over 90 minutes, chaining strategies based on
+what the score trajectory revealed.
+
+### Baseline: 0.3786
+
+The starting prompt scores 0.3786 on the held-out test set. A score of 0.38 on
+a 1–5 rubric normalized to 0–1 means the model is consistently producing
+2-rated output — free-form prose with the right facts but none of the required
+structure.
+
+### Phase 1 — structural (12 minutes)
+
+The reasoning model identified this as a structural problem: the prompt says
+nothing about output format. It generated 4 structural variants and tested each
+on all 45 training examples in parallel:
+
+| Variant | Score | Delta |
+|---|---|---|
+| markdown_structure | 0.3889 | +0.0000 — no effect |
+| minimal_flat | 0.4167 | +0.0278 — helped |
+| section_reorder | 0.4333 | +0.0444 — helped |
+| **agent_guided** | **0.8389** | **+0.4500 — helped** |
+
+The `agent_guided` variant — which added explicit numbered instructions,
+a word limit, and a priority order — jumped the score from **0.39 → 0.84** in a
+single step. Adding headers or flattening the prompt barely moved the needle.
+The model just needed to be told what to put in each sentence.
+
+The structural phase converged at **0.8611** after its second iteration, exceeding
+the 0.85 target.
+
+### Phase 2 — fewshot (29 minutes)
+
+The reasoning model recommended adding few-shot examples to show the exact
+phrasing and word economy expected:
+
+> *"The prompt has good structure but would benefit from concrete examples showing
+> the exact 3-sentence format and word economy expected. Few-shot examples would
+> clarify how to distill complex incident reports into the precise output format
+> while maintaining the priority order of information."*
+
+Reflex bootstrapped exemplar candidates by running the current best prompt
+across the training set and collecting the 20 highest-scoring outputs. It then
+tested prompts with 5 examples included.
+
+| Fewshot iteration | Train score |
+|---|---|
+| 1 | 0.7389 |
+| 2 | 0.8278 |
+| 3 | 0.8222 |
+
+The fewshot phase didn't beat the structural result (0.8611). The examples
+helped at first but then introduced instability — the model started mimicking
+the examples' specific phrasing too closely. Phase ended without converging at
+**0.8278**.
+
+### Phase 3 — iterative (35 minutes)
+
+The reasoning model switched to iterative refinement to fix the instruction
+language causing the remaining failures:
+
+> *"The fewshot phase showed declining performance, suggesting the core
+> instructions may have unclear wording or missing edge case handling that
+> examples alone can't fix."*
+
+Each iteration diagnosed the worst-scoring samples and proposed a targeted fix:
+
+- **Iter 1 → 2** (+0.028): Added explicit 75-word limit and mandatory financial
+  impact inclusion
+- **Iter 2 → 3** (-0.006): Word count verification and financial guidance
+  restructuring — marginal regression
+- **Iter 3 → 4** (-0.156): Overly specific conditional logic
+  ("use context-aware rules based on data type, access evidence") — this hurt
+  badly. The model struggled when given complex conditional rules.
+
+The iterative phase ended at **0.8333**. The rewrite log was accumulating
+dead ends, and the reasoning model recognized diminishing returns.
+
+### Phase 4 — PDO (7 minutes)
+
+PDO (Prompt Distribution Optimization) runs tournament-style duels between
+prompt variants, using Copeland, Borda, Elo, and average win-rate scoring to
+find the best overall:
+
+> *"PDO is ideal as a final polish step to identify subtle improvements when
+> other optimization approaches have been exhausted."*
+
+```
+Round 1: prompt 0 beat prompt 3, prompt 0 beat prompt 2, prompt 2 beat prompt 3
+Round 2: prompt 0 beat prompt 5, prompt 0 beat prompt 2, prompt 0 beat prompt 2
+Champion win rate: 1.000
+```
+
+Prompt 0 won every duel in both rounds. Training score hit **1.0000**. The PDO
+phase converged in 7 minutes.
+
+### Final test set eval
+
+The test set eval uses the **best-val prompt** (iteration 9: val=0.9000), not
+the final training-perfect prompt — this guards against overfitting on the
+training distribution.
+
+```
+Baseline TEST SET score : 0.3786
+Final TEST SET score    : 0.8857
+Improvement             : +0.5071 (+134.0%)
+Significance            : p=0.0000  ✓ (α=0.05, paired test)
+```
+
+## Before and after
+
+The same input, the same model, two different prompts:
+
+**Input** (abridged):
+```
+SECURITY INCIDENT REPORT
+Incident ID: INC-97177
+Classification: Medium — Ransomware
+Reporting Entity: Cascade Software Inc
+
+A phishing email delivered a malicious macro-enabled attachment. Cl0p ransomware
+was deployed, encrypting finance department workstations and the document
+management system. Contained after 6 hours. 40 employees affected. Estimated
+impact: $24K. Systems rebuilt from clean backups; MFA enforced on all remote access.
+```
+
+**Before** (score: 0.250 / 5):
+```
+Here is a summary of the security incident report:
+
+**Incident Summary:**
+* Date: 2024-03-12
+* Classification: Medium - Ransomware
+* Affected Entity: Cascade Software Inc
+
+**Incident Details:**
+* A phishing email with a malicious macro-enabled attachment was used to gain
+  initial access.
+* The Cl0p ransomware was deployed, encrypting finance department workstations
+  and the document management system.
+* The incident was contained after approximately 6 hours...
+```
+
+The model understood the incident perfectly. It just produced a format that
+scores 2/5 — markdown bullets, a section header, and no cost figure in the
+right place.
+
+**After** (score: 1.000 / 5):
+```
+Cl0p ransomware encrypted finance department workstations and the document
+management system at Cascade Software Inc after a phishing email delivered a
+malicious macro-enabled attachment. The 6-hour outage affected 40 employees
+with estimated impact of $24K in lost productivity and recovery costs. The
+environment was rebuilt from clean backups, endpoint detection rules updated,
+and MFA enforced on all remote access.
+```
+
+Exactly 3 sentences. Correct priority order. Specific figures in the right
+sentence. Score: 5/5.
+
+## The optimized prompt
+
+```text title="security_incidents_best_prompt.md"
+# SECURITY INCIDENT SUMMARY
+
+## OUTPUT FORMAT
+Write exactly 3 sentences in paragraph form (MAXIMUM 75 words):
+1. Attack vector and primary impact
+2. Duration, affected count, and financial impact
+3. Key remediation actions taken
+
+## REQUIREMENTS
+- STRICT 75-word maximum — count every word
+- Use EXACT figures from input (costs, counts, timeframes)
+- ALWAYS include financial impact in sentence 2 ("estimated impact of $X" format)
+- If no cost given, estimate based on scope: <10 systems=$1K, 10-100=$24K, 100-1000=$120K
+- Exclude: bullet points, headers, recommendations sections
+
+## PRIORITY ORDER
+1. Attack method and main systems affected
+2. Timeline duration, affected count, and business impact figures
+3. Immediate response actions completed
+```
+
+Plus 2 few-shot examples (injected by reflex during the fewshot phase and
+retained in the final prompt).
+
+## Score trajectory
+
+```
+Train : 0.389 → 0.739 → 0.828 → 0.822 → 0.806 → 0.833 → 0.828 → 0.672 → 1.000 → 1.000
+Val   : 0.438 → 0.762 → 0.775 → 0.800 → 0.750 → 0.838 → 0.800 → 0.650 → 0.900 → 0.838
+```
+
+The dip at iteration 8 (train=0.672) is the iterative phase trying an
+overly-specific conditional rule that backfired. The recovery to 1.0 in
+iteration 9 is PDO selecting a cleaner variant. The val score peaks at 0.9 in
+iteration 9, which is what the final test eval is drawn from.
+
+## Key takeaways
+
+**Format problems need structural fixes, not examples.** The single biggest gain
+(+0.45) came from adding explicit numbered instructions and a word limit —
+before the optimizer had seen a single failure in detail. Examples helped
+briefly but introduced fragility.
+
+**Complex conditional logic hurts small models.** The worst regression (-0.16)
+came from adding "context-aware" estimation rules. Llama 3.1 8B follows clear
+imperative instructions well; it struggles when given conditional branching
+within a prompt.
+
+**The val split prevents overfitting from being invisible.** The training score
+hit 1.0, but the val score was 0.9 and the test score was 0.886. Without the
+val checkpoint, reflex would have saved the iteration-10 prompt (train=1.0,
+val=0.838) instead of the iteration-9 prompt (train=1.0, val=0.9) — a worse
+choice for generalization.
+
+**Small judge models work for format compliance.** Qwen3 8B (judge) is a
+fraction of the cost of GPT-4o, and format compliance is an easy judgment:
+count the sentences, check the required content is present, verify figures
+match the report. You don't need a frontier model for that.
+
+## Run it yourself
+
+The dataset, starting prompt, judge rubric, and best prompt are all in
+`examples/`:
+
+```bash
+pip install aevyra-reflex
+
+export OPENROUTER_API_KEY=sk-or-...
+
+aevyra-reflex optimize examples/security_incidents.jsonl \
+  examples/security_incidents_prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --judge openrouter/qwen/qwen3-8b \
+  --judge-criteria examples/security_incidents_judge.md \
+  --max-workers 4 \
+  -o best_prompt.md
+```
+
+Total cost on OpenRouter for this run: well under $5.

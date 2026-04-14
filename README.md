@@ -94,11 +94,20 @@ Requires `aevyra-verdict`. By default, uses Claude for reasoning
 ## Quick start
 
 One command runs baseline eval, optimizes the prompt, re-evaluates, and shows
-a before/after comparison:
+a before/after comparison. This example teaches a model to produce strict
+3-sentence executive briefs from security incident reports — starting from a
+vague prompt that scores 0.38 and finishing at 0.89 on a held-out test set:
 
 ```bash
-aevyra-reflex optimize examples/summarization.jsonl examples/summarization_prompt.md \
-  -m local/llama3.1 -o best_prompt.md
+export OPENROUTER_API_KEY=sk-or-...
+
+aevyra-reflex optimize examples/security_incidents.jsonl \
+  examples/security_incidents_prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --judge openrouter/qwen/qwen3-8b \
+  --judge-criteria examples/security_incidents_judge.md \
+  --max-workers 4 \
+  -o examples/security_incidents_best_prompt.md
 ```
 
 Output:
@@ -107,55 +116,73 @@ Output:
 ====================================================
   aevyra-reflex
 ====================================================
-  Dataset    : summarization.jsonl (20 samples)
-  Split      : 35 train / 5 val / 10 test (70% / 10% / 20%)
-  Model(s)   : local/llama3.1
+  Dataset    : security_incidents.jsonl (100 samples)
+  Split      : 45 train / 20 val / 35 test (45% / 20% / 35%)
+  Model(s)   : openrouter/meta-llama/llama-3.1-8b-instruct
   Strategy   : auto
-  Metrics    : rouge
+  Metrics    : LLM judge
   Reasoning  : claude-sonnet-4-20250514
-  Target     : 0.85
+  Target     : 0.8500
+  Workers    : 4
 ====================================================
 
 Step 1/3  Running baseline eval...
+[run 069][auto] Baseline TEST SET score: 0.3786
 
 Step 2/3  Optimizing...
-  iteration  1  score: 0.6234
-  iteration  2  score: 0.7105
-  iteration  3  score: 0.8612
+  Phase 1 (structural) done: score=0.8611, converged=True
+  Phase 2 (fewshot)    done: score=0.8278, converged=False
+  Phase 3 (iterative)  done: score=0.8333, converged=False
+  Phase 4 (pdo)        done: score=1.0000, converged=True
 
 Step 3/3  Verifying...
 
 ====================================================
   OPTIMIZATION RESULTS
 ====================================================
-  Train / val / test : 35 / 5 / 10 samples
-  Baseline score   : 0.5821  (on 10-sample test set)
-  Final score      : 0.8612  (on 10-sample test set)
-  Improvement      : +0.2791 (+47.9%)
-  Iterations       : 3
+  Train/val/test   : 45 / 20 / 35 samples
+  Baseline score   : 0.3786  (on 35-sample test set)
+  Final score      : 0.8857  (on 35-sample test set)
+  Improvement      : +0.5071 (+134.0%)
+  Significance     : p=0.0000  ✓ significant (α=0.05, paired test)
+  Iterations       : 10
   Converged        : True
 ----------------------------------------------------
   Per-metric breakdown:
-    rouge                           0.5821 → 0.8612  (+0.2791)
+    llm_judge                       0.3786 → 0.8857  (+0.5071)
 ----------------------------------------------------
-  Trajectory : 0.623 → 0.711 → 0.861
+  Train traj : 0.389 → 0.739 → 0.828 → 0.822 → 0.806 → 0.833 → 0.828 → 0.672 → 1.000 → 1.000
+  Val traj   : 0.438 → 0.762 → 0.775 → 0.800 → 0.750 → 0.838 → 0.800 → 0.650 → 0.900 → 0.838
 ====================================================
 
-Best prompt saved to: best_prompt.md
+Best prompt saved to: examples/security_incidents_best_prompt.md
 ```
 
-Or the Python API — five lines:
+The starting prompt is four words: `Summarize this security incident report.`
+The model produces markdown bullets at 0.38. After 10 iterations across 4
+strategy phases, the same model produces tight 3-sentence briefs at 0.89 —
+statistically significant on 35 held-out examples it never saw.
+
+See the [full walkthrough](docs/tutorial-security-incidents.mdx) for a
+phase-by-phase breakdown of what changed and why.
+
+Or the Python API:
 
 ```python
-from aevyra_verdict import Dataset, RougeScore
-from aevyra_reflex import PromptOptimizer, OptimizerConfig
+from aevyra_verdict import Dataset, LLMJudge
+from aevyra_verdict.providers import AnthropicProvider
+from aevyra_reflex import PromptOptimizer
+from pathlib import Path
 
 result = (
-    PromptOptimizer(OptimizerConfig(strategy="auto", max_iterations=10))
-    .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
-    .add_provider("openai", "gpt-5.4-nano")
-    .add_metric(RougeScore())
-    .run("You are a helpful assistant.")
+    PromptOptimizer()
+    .set_dataset(Dataset.from_jsonl("examples/security_incidents.jsonl"))
+    .add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
+    .add_metric(LLMJudge(
+        judge_provider=AnthropicProvider(model="claude-sonnet-4-6"),
+        criteria=Path("examples/security_incidents_judge.md").read_text(),
+    ))
+    .run(Path("examples/security_incidents_prompt.md").read_text())
 )
 
 print(result.summary())
@@ -417,14 +444,31 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.1 --judge openai/gpt-4o -o best_prompt.md
 ```
 
+Pass a custom criteria file to tell the judge exactly what to look for:
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m anthropic/claude-haiku-4-5-20251001 \
+  --judge anthropic/claude-sonnet-4-6 \
+  --judge-criteria criteria.md
+```
+
+The criteria file is plain text describing your evaluation rubric and scoring
+scale (1–5). Without `--judge-criteria` the judge uses a default
+accuracy/helpfulness/clarity/completeness rubric.
+
 ```python
 from aevyra_verdict import LLMJudge
+from aevyra_verdict.providers import AnthropicProvider
 
 result = (
-    PromptOptimizer(OptimizerConfig(strategy="auto"))
+    PromptOptimizer()
     .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
-    .add_provider("openai", "gpt-4o-mini")
-    .add_metric(LLMJudge(judge_provider="openai", judge_model="gpt-4o"))
+    .add_provider("anthropic", "claude-haiku-4-5-20251001")
+    .add_metric(LLMJudge(
+        judge_provider=AnthropicProvider(model="claude-sonnet-4-6"),
+        criteria=Path("criteria.md").read_text(),
+    ))
     .run("You are a helpful assistant.")
 )
 ```
@@ -439,6 +483,7 @@ aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --max-iteration
 aevyra-reflex optimize dataset.jsonl prompt.md -m openai/gpt-5.4-nano -s iterative --metric rouge
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s pdo --max-iterations 50
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --judge openai/gpt-4o
+aevyra-reflex optimize dataset.jsonl prompt.md -m anthropic/claude-haiku-4-5-20251001 --judge anthropic/claude-sonnet-4-6 --judge-criteria rubric.md
 aevyra-reflex dashboard
 aevyra-reflex runs
 ```

@@ -16,10 +16,11 @@ separate server. This also installs
 ## Set your API keys
 
 By default, reflex uses Claude for reasoning (analyzing failures, rewriting
-prompts). You also need a key for whatever model you're evaluating:
+prompts). Set keys for whichever model provider you're using:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...    # default reasoning model
+export OPENROUTER_API_KEY=sk-or-...    # if using OpenRouter models
 export OPENAI_API_KEY=sk-...           # if optimizing an OpenAI model
 ```
 
@@ -32,71 +33,92 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
   --reasoning-model ollama/qwen3:8b
 ```
 
-## Prepare a dataset
+## Run the example
 
-Use the same JSONL format as verdict — each line has messages and an ideal answer:
+The `examples/` directory includes a ready-to-run dataset: 100 security
+incident reports where the task is to produce a strict 3-sentence executive
+brief. The starting prompt is four words. The model starts at 0.38 and finishes
+at 0.89 — a 134% improvement, statistically significant on held-out data.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+
+aevyra-reflex optimize examples/security_incidents.jsonl \
+  examples/security_incidents_prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --judge openrouter/qwen/qwen3-8b \
+  --judge-criteria examples/security_incidents_judge.md \
+  --max-workers 4 \
+  -o examples/security_incidents_best_prompt.md
+```
+
+You'll see a baseline eval, 4 strategy phases, and a final test set verification:
+
+```
+====================================================
+  OPTIMIZATION RESULTS
+====================================================
+  Train/val/test   : 45 / 20 / 35 samples
+  Baseline score   : 0.3786  (on 35-sample test set)
+  Final score      : 0.8857  (on 35-sample test set)
+  Improvement      : +0.5071 (+134.0%)
+  Significance     : p=0.0000  ✓ significant (α=0.05, paired test)
+  Iterations       : 10
+  Converged        : True
+====================================================
+```
+
+See the [full walkthrough](/reflex/tutorial-security-incidents) for a
+phase-by-phase breakdown of every decision reflex made.
+
+## Bring your own dataset
+
+Use the same JSONL format as verdict — each line has `messages` and an `ideal` answer:
 
 ```json
 {"messages": [{"role": "user", "content": "What is the capital of France?"}], "ideal": "Paris"}
 {"messages": [{"role": "user", "content": "Explain binary search in one sentence."}], "ideal": "Binary search repeatedly halves a sorted array to find a target value in O(log n) time."}
 ```
 
-No ideal answers? Use a label-free dataset with an LLM judge — see
+CSV is also supported:
+
+```bash
+aevyra-reflex optimize data.csv prompt.md -m openrouter/meta-llama/llama-3.1-8b-instruct
+```
+
+No ideal answers? Use an LLM judge instead of automated metrics — see
 [Label-free evaluation](/reflex/configuration#label-free-evaluation).
 
 ## Write a starting prompt
 
-Create a plain text file with your system prompt:
+Create a plain text file with your system prompt. It doesn't need to be good —
+reflex will improve it:
 
 ```
 You are a helpful assistant. Answer questions concisely.
 ```
 
-This is the prompt reflex will improve.
+## Use the Python API
 
-## Run your first optimization
+```python
+from aevyra_verdict import Dataset, LLMJudge
+from aevyra_verdict.providers import AnthropicProvider
+from aevyra_reflex import PromptOptimizer
+from pathlib import Path
 
-```bash
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
-  -o best_prompt.md
-```
+result = (
+    PromptOptimizer()
+    .set_dataset(Dataset.from_jsonl("examples/security_incidents.jsonl"))
+    .add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
+    .add_metric(LLMJudge(
+        judge_provider=AnthropicProvider(model="claude-sonnet-4-6"),
+        criteria=Path("examples/security_incidents_judge.md").read_text(),
+    ))
+    .run(Path("examples/security_incidents_prompt.md").read_text())
+)
 
-You'll see a baseline eval, iterations with rising scores, and a final
-verification:
-
-```
-====================================================
-  aevyra-reflex
-====================================================
-  Dataset    : dataset.jsonl (50 samples)
-  Model(s)   : local/llama3.1
-  Strategy   : auto
-  Metrics    : rouge
-  Reasoning  : claude-sonnet-4-20250514
-  Target     : 0.85
-====================================================
-
-Step 1/3  Running baseline eval...
-
-Step 2/3  Optimizing...
-  iteration  1  score: 0.6234
-  iteration  2  score: 0.7105
-  iteration  3  score: 0.8612
-
-Step 3/3  Verifying...
-
-====================================================
-  OPTIMIZATION RESULTS
-====================================================
-  Baseline score   : 0.5821
-  Final score      : 0.8612
-  Improvement      : +0.2791 (+47.9%)
-  Iterations       : 3
-  Converged        : True
-====================================================
-
-Best prompt saved to: best_prompt.md
+print(result.summary())
+result.save_best_prompt("best_prompt.md")
 ```
 
 ## Explore the run in the dashboard
@@ -110,24 +132,6 @@ aevyra-reflex dashboard
 
 Opens `http://localhost:8128`. No separate server, no build step. Click into
 any run to see what changed each iteration and why.
-
-## Use the Python API
-
-```python
-from aevyra_verdict import Dataset, RougeScore
-from aevyra_reflex import PromptOptimizer, OptimizerConfig
-
-result = (
-    PromptOptimizer(OptimizerConfig(strategy="auto", max_iterations=10))
-    .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
-    .add_provider("local", "llama3.1")
-    .add_metric(RougeScore())
-    .run("You are a helpful assistant.")
-)
-
-print(result.summary())
-result.save_best_prompt("best_prompt.md")
-```
 
 ## Set a real target (verdict → reflex)
 
@@ -150,24 +154,12 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
   -o best_prompt.md
 ```
 
-## Use a cloud provider
-
-```bash
-# OpenRouter (pay-per-token, many models)
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m openrouter/meta-llama/llama-3.1-8b-instruct \
-  --target openai/gpt-4o-mini \
-  -o best_prompt.md
-
-# Together AI
-aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m together/meta-llama/Llama-3.1-8B-Instruct \
-  -o best_prompt.md
-```
-
 ## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Tutorial" icon="book-open" href="/reflex/tutorial-security-incidents">
+    Full walkthrough of the security incidents example
+  </Card>
   <Card title="Dashboard" icon="chart-line" href="/reflex/dashboard">
     Score charts, prompt diffs, branch runs
   </Card>
@@ -176,8 +168,5 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
   </Card>
   <Card title="Configuration" icon="gear" href="/reflex/configuration">
     Iterations, thresholds, parallelism, strategy params
-  </Card>
-  <Card title="CLI reference" icon="terminal" href="/reflex/cli">
-    All flags and options
   </Card>
 </CardGroup>

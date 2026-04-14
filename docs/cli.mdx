@@ -29,6 +29,7 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 | `-s`, `--strategy` | `auto` | Optimization strategy: `auto`, `iterative`, `structural`, `pdo`, `fewshot` (or any custom registered strategy) |
 | `--metric` | `rouge` | Scoring metric: `rouge`, `bleu`, `exact`. Mutually exclusive with `--judge` |
 | `--judge` | — | Use an LLM judge instead of automated metrics. Format: `provider/model`. Mutually exclusive with `--metric` |
+| `--judge-criteria` | — | Path to a text file containing a custom evaluation rubric for the judge. Only used with `--judge`. Without this flag the judge uses a default accuracy/helpfulness/clarity/completeness rubric |
 | `--max-iterations` | `10` | Maximum optimization iterations (total budget for auto) |
 | `--threshold` | — | Explicit score threshold (0.0–1.0). Overrides `--target` and `--verdict-results`. Defaults to 0.85 if no target is set |
 | `--max-workers` | `4` | Parallel workers for variant evaluation |
@@ -95,6 +96,13 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m openrouter/meta-llama/llama-3.1-8b-instruct \
   --judge openrouter/openai/gpt-4o-mini \
+  -o best_prompt.md
+
+# Judge with a custom evaluation rubric
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m anthropic/claude-haiku-4-5-20251001 \
+  --judge anthropic/claude-sonnet-4-6 \
+  --judge-criteria rubric.md \
   -o best_prompt.md
 
 # Use a local Ollama model for reasoning

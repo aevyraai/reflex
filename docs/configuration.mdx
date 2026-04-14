@@ -648,7 +648,28 @@ aevyra-reflex optimize ... --metric bleu
 
 # LLM judge (no automated metric)
 aevyra-reflex optimize ... --judge openrouter/openai/gpt-4o-mini
+
+# LLM judge with a custom evaluation rubric
+aevyra-reflex optimize ... \
+  --judge anthropic/claude-sonnet-4-6 \
+  --judge-criteria rubric.md
 ```
 
 `--metric` and `--judge` are mutually exclusive. If neither is specified,
 ROUGE is used as the default.
+
+`--judge-criteria` only applies when `--judge` is set. It accepts a path to a
+plain text file describing your scoring rubric (1–5 scale). Use this when the
+default accuracy/helpfulness/clarity/completeness criteria don't match your
+task — for example, when you need to enforce a strict output format, check
+domain-specific correctness, or evaluate against a proprietary style guide.
+
+```text title="rubric.md (example)"
+Score the response from 1 to 5:
+
+5 — Exactly 3 sentences covering what happened, impact, and remediation.
+4 — 3 sentences but missing one required detail (e.g. financial cost).
+3 — Wrong number of sentences but factually accurate.
+2 — Free-form prose with correct facts but ignores structure.
+1 — Missing critical content or fabricated details.
+```
