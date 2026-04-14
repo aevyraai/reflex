@@ -117,10 +117,6 @@ def parse_verdict_results(
 # OpenRouterProvider that reads OPENROUTER_API_KEY directly. Aliasing it to
 # the openai provider caused confusing "OPENAI_API_KEY not set" errors.
 PROVIDER_ALIASES: dict[str, dict[str, str]] = {
-    "openrouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "env_key": "OPENROUTER_API_KEY",
-    },
     "together": {
         "base_url": "https://api.together.xyz/v1",
         "env_key": "TOGETHER_API_KEY",

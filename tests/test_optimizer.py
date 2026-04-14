@@ -207,14 +207,16 @@ class TestOllamaDetection:
 class TestAddProvider:
     """Tests for PromptOptimizer.add_provider() with alias resolution."""
 
-    def test_add_openrouter_resolves(self, monkeypatch):
+    def test_add_openrouter_passthrough(self, monkeypatch):
+        # openrouter passes through to verdict's native OpenRouterProvider;
+        # it is NOT aliased to openai (that caused confusing OPENAI_API_KEY errors).
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
         opt = PromptOptimizer()
         opt.add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
         p = opt._providers[0]
-        assert p["provider_name"] == "openai"
-        assert "openrouter" in p["base_url"]
-        assert p["api_key"] == "sk-or-test"
+        assert p["provider_name"] == "openrouter"
+        assert p["base_url"] is None   # OpenRouterProvider sets its own base_url
+        assert p["api_key"] is None    # OpenRouterProvider reads OPENROUTER_API_KEY itself
 
     def test_add_local_passthrough(self):
         opt = PromptOptimizer()
