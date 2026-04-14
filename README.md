@@ -1,6 +1,7 @@
 # aevyra-reflex
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Agentic prompt optimization built for production workloads. Reflex takes your dataset and
 prompt, runs evals, diagnoses why scores are falling short, and rewrites the prompt — iterating
