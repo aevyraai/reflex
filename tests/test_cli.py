@@ -111,8 +111,6 @@ class TestCLICallbackFlags:
         a real optimization. Patches out all I/O and returns the callbacks list
         that would have been passed to optimizer.run().
         """
-        import types
-
         captured = {}
 
         # Minimal stubs
