@@ -161,11 +161,11 @@ def optimize(
             help=(
                 "Fraction of data used for optimization (0.0–1.0). "
                 "The rest is held out for honest baseline and final eval. "
-                "Default: 0.8 (80%% train / 20%% test). "
+                "Default: 0.65 (65%% train+val / 35%% test). "
                 "Set to 1.0 to disable splitting."
             ),
         ),
-    ] = 0.8,
+    ] = 0.65,
     batch_size: Annotated[
         int,
         typer.Option(
@@ -210,11 +210,11 @@ def optimize(
                 "Fraction of data reserved as a validation set (0.0–1.0, exclusive). "
                 "Carved from the training portion; test size is unaffected. "
                 "Val scores are evaluated after each iteration to detect overfitting. "
-                "Default: 0.1 (10%% val). Set to 0.0 to disable. "
-                "Example: --train-split 0.8 --val-split 0.1 → 70%% train / 10%% val / 20%% test."
+                "Default: 0.20 (20%% val). Set to 0.0 to disable. "
+                "Example: --train-split 0.65 --val-split 0.20 → 45%% train / 20%% val / 35%% test."
             ),
         ),
-    ] = 0.1,
+    ] = 0.20,
     early_stopping_patience: Annotated[
         int,
         typer.Option(
@@ -276,9 +276,16 @@ def optimize(
         typer.echo("Error: use --verdict-results or --target, not both.", err=True)
         raise typer.Exit(code=1)
 
-    # Load
+    # Load — auto-detect CSV vs JSONL from extension
     from aevyra_verdict import Dataset
-    ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
+    if dataset.suffix.lower() == ".csv":
+        ds = Dataset.from_csv(
+            str(dataset),
+            input_field=input_field or "input",
+            output_field=output_field if output_field is not None else "ideal",
+        )
+    else:
+        ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
     initial_prompt = prompt.read_text().strip()
 
     # Resolve the score threshold.

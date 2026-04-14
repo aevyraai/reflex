@@ -95,6 +95,12 @@ class OptimizationResult:
     strategy_name: str = ""
     phase_history: list[dict] = field(default_factory=list)  # auto strategy phases
 
+    # LLM-generated post-run analysis (filled by optimizer after run)
+    what_happened: str = ""
+
+    # Timing (filled by optimizer)
+    duration_seconds: float = 0.0
+
     @property
     def score_trajectory(self) -> list[float]:
         return [r.score for r in self.iterations]
@@ -152,7 +158,9 @@ class OptimizationResult:
             if self.p_value is not None:
                 sig_mark = "✓ significant" if self.is_significant else "✗ not significant"
                 lines.append(f"  Significance     : p={self.p_value:.4f}  {sig_mark} (α=0.05, paired test)")
-            elif self.baseline.samples and len(self.baseline.samples) < 2:
+            elif not self.baseline.samples or not self.final.samples:
+                lines.append("  Significance     : n/a (per-sample scores not available)")
+            elif len(self.baseline.samples) < 2:
                 lines.append("  Significance     : n/a (need ≥2 samples)")
             else:
                 lines.append("  Significance     : install scipy for p-values")
@@ -164,6 +172,15 @@ class OptimizationResult:
                 def _fmt_tok(n): return f"{n/1e6:.2f}M" if n >= 1_000_000 else (f"{n/1000:.1f}K" if n >= 1000 else str(n))
                 lines.append(f"  Eval tokens      : {_fmt_tok(self.total_eval_tokens)}")
                 lines.append(f"  Reasoning tokens : {_fmt_tok(self.total_reasoning_tokens)}")
+            if self.duration_seconds > 0:
+                _dm, _ds = divmod(int(self.duration_seconds), 60)
+                _dh, _dm = divmod(_dm, 60)
+                _dlabel = (
+                    f"{_dh}h {_dm}m {_ds}s" if _dh
+                    else f"{_dm}m {_ds}s" if _dm
+                    else f"{_ds}s"
+                )
+                lines.append(f"  Duration         : {_dlabel}")
             lines.append("-" * 52)
 
             if self.baseline.scores_by_metric or self.final.scores_by_metric:
@@ -187,21 +204,31 @@ class OptimizationResult:
             strategy_insight = self._analyze_strategy()
             prompt_insight = self._analyze_prompt_changes()
 
-            if analysis or strategy_insight or prompt_insight:
+            if self.what_happened or analysis or strategy_insight or prompt_insight:
                 lines.append("")
                 lines.append("  WHAT HAPPENED")
                 lines.append("-" * 52)
-                for line in analysis:
-                    lines.append(f"  {line}")
-                if strategy_insight:
-                    if analysis:
+                if self.what_happened:
+                    # LLM-generated analysis — wrap at ~80 chars per line
+                    import textwrap
+                    for paragraph in self.what_happened.strip().split("\n"):
+                        if paragraph.strip():
+                            for wrapped in textwrap.wrap(paragraph.strip(), width=76):
+                                lines.append(f"  {wrapped}")
+                        else:
+                            lines.append("")
+                else:
+                    for line in analysis:
+                        lines.append(f"  {line}")
+                    if strategy_insight:
+                        if analysis:
+                            lines.append("")
+                        for line in strategy_insight:
+                            lines.append(f"  {line}")
+                    if prompt_insight:
                         lines.append("")
-                    for line in strategy_insight:
-                        lines.append(f"  {line}")
-                if prompt_insight:
-                    lines.append("")
-                    for line in prompt_insight:
-                        lines.append(f"  {line}")
+                        for line in prompt_insight:
+                            lines.append(f"  {line}")
                 lines.append("=" * 52)
 
             # Before/after example
@@ -265,12 +292,18 @@ class OptimizationResult:
                 f"last one."
             )
         elif flat_steps > n // 2:
+            _phases_run = {p.get("strategy") for p in (self.phase_history or [])}
+            _fewshot_run = "fewshot" in _phases_run or self.strategy_name == "fewshot"
+            _plateau_hint = (
+                "A larger or more capable model may be needed to go higher."
+                if _fewshot_run else
+                "A larger model or adding few-shot examples may be needed to go higher."
+            )
             lines.append(
                 "The score plateaued — it jumped initially then "
                 "stopped improving despite further prompt changes. "
-                "This usually means the model has hit its capability "
-                "ceiling for this task. A larger model or adding "
-                "few-shot examples may be needed to go higher."
+                f"This usually means the model has hit its capability "
+                f"ceiling for this task. {_plateau_hint}"
             )
         elif improving_steps > declining_steps * 2:
             lines.append(
@@ -324,10 +357,18 @@ class OptimizationResult:
                 )
             if self.baseline and self.final:
                 score_gap = 1.0 - final
-                if score_gap > 0.3:
+                phases_run = {p.get("strategy") for p in (self.phase_history or [])}
+                fewshot_already_run = "fewshot" in phases_run or self.strategy_name == "fewshot"
+                if score_gap > 0.3 and not fewshot_already_run:
                     suggestions.append(
                         "try the 'fewshot' strategy — adding examples "
                         "often helps smaller models"
+                    )
+                elif score_gap > 0.3 and fewshot_already_run:
+                    suggestions.append(
+                        "try a different eval model — few-shot examples "
+                        "were already added but the score didn't improve; "
+                        "the model may not be capable enough for this task"
                     )
 
         if suggestions:
@@ -659,6 +700,10 @@ class OptimizationResult:
                 "scores_by_metric": self.baseline.scores_by_metric,
                 "system_prompt": self.baseline.system_prompt,
                 "total_tokens": self.baseline.total_tokens,
+                "samples": [
+                    {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                    for s in self.baseline.samples
+                ],
             }
         if self.final:
             d["final"] = {
@@ -668,6 +713,10 @@ class OptimizationResult:
                 "scores_by_metric": self.final.scores_by_metric,
                 "system_prompt": self.final.system_prompt,
                 "total_tokens": self.final.total_tokens,
+                "samples": [
+                    {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                    for s in self.final.samples
+                ],
             }
         if self.train_size:
             d["train_size"] = self.train_size
@@ -691,6 +740,8 @@ class OptimizationResult:
             d["strategy_name"] = self.strategy_name
         if self.phase_history:
             d["phase_history"] = self.phase_history
+        if self.what_happened:
+            d["what_happened"] = self.what_happened
         return d
 
     def to_json(self, path: str | Path) -> None:

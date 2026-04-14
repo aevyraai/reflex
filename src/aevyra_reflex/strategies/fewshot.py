@@ -93,23 +93,65 @@ class FewShotStrategy(Strategy):
         run_config = RunConfig(
             temperature=config.eval_temperature,
             max_tokens=config.max_tokens,
+            max_workers=config.max_workers,
         )
 
-        # Phase 1: Bootstrap — run the bare instruction to find good exemplars
-        logger.info("Phase 1: Bootstrapping exemplar candidates...")
-        candidate_exemplars = _bootstrap_exemplars(
-            prompt=initial_prompt,
-            dataset=dataset,
-            providers=providers,
-            metrics=metrics,
-            run_config=run_config,
-            pool_size=fs_config.candidate_pool_size,
-        )
-        logger.info(f"  Collected {len(candidate_exemplars)} candidate exemplars")
+        # Restore state on resume
+        rs = resume_state or {}
+        iters_done: int = rs.get("iters_done", 0)
+        current_instruction: str = rs.get("current_instruction", initial_prompt)
+        current_examples: list[dict[str, str]] = rs.get("current_examples", [])
+
+        # Phase 1: Bootstrap — skip if we already have enough candidates from a
+        # previous run (including partial bootstrap that was interrupted mid-way).
+        _saved_candidates: list = rs.get("candidate_exemplars", [])
+        _bootstrap_done: bool = rs.get("bootstrap_done", False)
+        # Bootstrap eval tokens are persisted in state so they survive a crash
+        # between bootstrap completion and iteration 1 finishing.
+        _bootstrap_eval_tokens: int = rs.get("bootstrap_eval_tokens", 0)
+        if _bootstrap_done and _saved_candidates:
+            candidate_exemplars = _saved_candidates
+            logger.info(f"Phase 1: Resuming with {len(candidate_exemplars)} saved exemplar candidates (skipping bootstrap)")
+        else:
+            # Evaluate samples one at a time so partial progress can survive an
+            # interruption — each scored sample is checkpointed immediately.
+            already_scored = len(_saved_candidates)
+            if already_scored:
+                logger.info(f"Phase 1: Resuming bootstrap ({already_scored}/{len(dataset.conversations)} already scored)...")
+            else:
+                logger.info("Phase 1: Bootstrapping exemplar candidates...")
+            new_tokens: int  # tokens from samples scored in this session only
+            candidate_exemplars, new_tokens = _bootstrap_exemplars(
+                prompt=initial_prompt,
+                dataset=dataset,
+                providers=providers,
+                metrics=metrics,
+                run_config=run_config,
+                pool_size=fs_config.candidate_pool_size,
+                partial_candidates=_saved_candidates,
+                on_sample=lambda candidates: update_strategy_state({
+                    "candidate_exemplars": candidates,
+                    "bootstrap_done": False,
+                    "bootstrap_eval_tokens": _bootstrap_eval_tokens,
+                    "iters_done": 0,
+                    "current_instruction": current_instruction,
+                    "current_examples": current_examples,
+                }) if update_strategy_state else None,
+            )
+            _bootstrap_eval_tokens += new_tokens
+            _fmt_bt = f"{_bootstrap_eval_tokens / 1000:.1f}K" if _bootstrap_eval_tokens >= 1000 else str(_bootstrap_eval_tokens)
+            logger.info(f"  Collected {len(candidate_exemplars)} candidate exemplars (bootstrap eval tokens: {_fmt_bt})")
+            if update_strategy_state:
+                update_strategy_state({
+                    "candidate_exemplars": candidate_exemplars,
+                    "bootstrap_done": True,
+                    "bootstrap_eval_tokens": _bootstrap_eval_tokens,
+                    "iters_done": 0,
+                    "current_instruction": current_instruction,
+                    "current_examples": current_examples,
+                })
 
         # Phase 2: Iterative example selection and formatting
-        current_instruction = initial_prompt
-        current_examples: list[dict[str, str]] = []
         failing_samples: list = []
         iterations: list[IterationRecord] = []
 
@@ -117,32 +159,31 @@ class FewShotStrategy(Strategy):
         _batch_seed = getattr(config, "batch_seed", 42)
         _full_eval_steps = getattr(config, "full_eval_steps", 0)
 
-        for i in range(config.max_iterations):
+        # Mid-iteration checkpoint: saves agent selection + eval result so a
+        # crash during the (cheap) refine call doesn't force re-running the
+        # (expensive) eval.
+        _iter_state: dict = rs.get("fewshot_iter_state", {})
+
+        def _save_iter_state(state: dict) -> None:
+            if update_strategy_state:
+                update_strategy_state({
+                    "candidate_exemplars": candidate_exemplars,
+                    "bootstrap_done": True,
+                    "bootstrap_eval_tokens": _bootstrap_eval_tokens,
+                    # mid-iter: save i so resume restarts this iteration
+                    # (not i+1, which would skip it)
+                    "iters_done": i,
+                    "current_instruction": current_instruction,
+                    "current_examples": current_examples,
+                    "fewshot_iter_state": state,
+                })
+
+        for i in range(iters_done, config.max_iterations):
             logger.info(f"Iteration {i + 1}/{config.max_iterations}")
 
-            # Ask Claude to select/refine examples
-            if i == 0:
-                selected, instruction = agent.select_fewshot_examples(
-                    base_instruction=initial_prompt,
-                    candidate_exemplars=candidate_exemplars,
-                    max_examples=fs_config.max_examples,
-                    selection_strategy=fs_config.selection_strategy,
-                )
-            else:
-                selected, instruction = agent.refine_fewshot(
-                    current_instruction=current_instruction,
-                    current_examples=current_examples,
-                    candidate_exemplars=candidate_exemplars,
-                    failing_samples=failing_samples,
-                    max_examples=fs_config.max_examples,
-                    score_trajectory=[r.score for r in iterations],
-                )
-
-            current_examples = selected
-            current_instruction = instruction
-
-            # Build the composite prompt
-            composite_prompt = _build_fewshot_prompt(instruction, selected)
+            # Check for saved mid-iteration state for this specific iteration
+            _saved = _iter_state if _iter_state.get("iter") == i else {}
+            _saved_stage = _saved.get("stage", "")
 
             # Determine full-eval checkpoint or mini-batch for this iteration
             is_full_eval = (
@@ -152,17 +193,75 @@ class FewShotStrategy(Strategy):
             )
             effective_batch = 0 if is_full_eval else _batch_size
 
-            # Evaluate
-            score, failing_samples, eval_tokens = _run_eval(
-                prompt=composite_prompt,
-                dataset=dataset,
-                providers=providers,
-                metrics=metrics,
-                run_config=run_config,
-                bottom_k=fs_config.bottom_k,
-                batch_size=effective_batch,
-                iteration_seed=_batch_seed + i,
-            )
+            # Ask Claude to select/refine examples (or restore from checkpoint)
+            reasoning_before = getattr(agent, "tokens_used", 0)
+            # Reasoning tokens from a previous session (saved in mid-iter checkpoint)
+            # are carried forward so a resume doesn't zero out the spent tokens.
+            _saved_reasoning_tokens: int = _saved.get("reasoning_tokens_so_far", 0)
+            if _saved_stage == "eval_done":
+                # Restore everything from the mid-iter checkpoint
+                composite_prompt = _saved["composite_prompt"]
+                selected = _saved["selected"]
+                instruction = _saved["instruction"]
+                score = _saved["score"]
+                eval_tokens = _saved["eval_tokens"]
+                failing_samples = _saved["failing_samples"]
+                current_examples = selected
+                current_instruction = instruction
+                logger.info(f"  Resuming — reusing saved selection + eval (score: {score:.4f})")
+            else:
+                if i == 0:
+                    selected, instruction = agent.select_fewshot_examples(
+                        base_instruction=initial_prompt,
+                        candidate_exemplars=candidate_exemplars,
+                        max_examples=fs_config.max_examples,
+                        selection_strategy=fs_config.selection_strategy,
+                    )
+                else:
+                    selected, instruction = agent.refine_fewshot(
+                        current_instruction=current_instruction,
+                        current_examples=current_examples,
+                        candidate_exemplars=candidate_exemplars,
+                        failing_samples=failing_samples,
+                        max_examples=fs_config.max_examples,
+                        score_trajectory=[r.score for r in iterations],
+                    )
+
+                current_examples = selected
+                current_instruction = instruction
+
+                # Build the composite prompt
+                composite_prompt = _build_fewshot_prompt(instruction, selected)
+
+                # Evaluate
+                score, failing_samples, eval_tokens = _run_eval(
+                    prompt=composite_prompt,
+                    dataset=dataset,
+                    providers=providers,
+                    metrics=metrics,
+                    run_config=run_config,
+                    bottom_k=fs_config.bottom_k,
+                    batch_size=effective_batch,
+                    iteration_seed=_batch_seed + i,
+                )
+
+                # Fold initial bootstrap tokens into the first iteration so they
+                # flow through the IterationRecord machinery and survive resume.
+                if i == 0 and _bootstrap_eval_tokens:
+                    logger.debug(f"  Folding {_bootstrap_eval_tokens} bootstrap eval tokens into iteration 1")
+                    eval_tokens += _bootstrap_eval_tokens
+                    _bootstrap_eval_tokens = 0
+
+                # Checkpoint after eval so a crash during the next refine call
+                # doesn't force re-running this expensive eval. Also save
+                # reasoning tokens spent this iteration (agent selection) so
+                # they survive a resume that skips the selection on replay.
+                _save_iter_state({"iter": i, "stage": "eval_done",
+                                  "composite_prompt": composite_prompt,
+                                  "selected": selected, "instruction": instruction,
+                                  "score": score, "eval_tokens": eval_tokens,
+                                  "failing_samples": failing_samples,
+                                  "reasoning_tokens_so_far": getattr(agent, "tokens_used", 0) - reasoning_before})
 
             record = IterationRecord(
                 iteration=i + 1,
@@ -172,14 +271,15 @@ class FewShotStrategy(Strategy):
                 eval_tokens=eval_tokens,
                 is_full_eval=is_full_eval,
             )
+            record.reasoning_tokens = (getattr(agent, "tokens_used", 0) - reasoning_before) + _saved_reasoning_tokens
             iterations.append(record)
-            if on_iteration:
-                on_iteration(record)
 
             logger.info(f"  Score: {score:.4f} (target: {config.score_threshold:.4f})")
             logger.info(f"  Examples in prompt: {len(selected)}")
 
             if score >= config.score_threshold:
+                if on_iteration:
+                    on_iteration(record)
                 logger.info("Score threshold met — stopping.")
                 return OptimizationResult(
                     best_prompt=composite_prompt,
@@ -188,10 +288,12 @@ class FewShotStrategy(Strategy):
                     converged=True,
                 )
 
-            # Re-bootstrap periodically to discover new exemplars
+            # Re-bootstrap periodically to discover new exemplars.
+            # Tokens are folded into THIS iteration's record BEFORE on_iteration fires
+            # so the checkpoint and running total both see the full cost.
             if (i + 1) % fs_config.bootstrap_rounds == 0 and i + 1 < config.max_iterations:
                 logger.info("  Re-bootstrapping exemplar pool...")
-                new_candidates = _bootstrap_exemplars(
+                new_candidates, reboot_tokens = _bootstrap_exemplars(
                     prompt=composite_prompt,
                     dataset=dataset,
                     providers=providers,
@@ -199,12 +301,27 @@ class FewShotStrategy(Strategy):
                     run_config=run_config,
                     pool_size=fs_config.candidate_pool_size,
                 )
+                record.eval_tokens += reboot_tokens
                 # Merge pools, dedup by input
                 existing_inputs = {e["input"] for e in candidate_exemplars}
                 for c in new_candidates:
                     if c["input"] not in existing_inputs:
                         candidate_exemplars.append(c)
                         existing_inputs.add(c["input"])
+
+            if update_strategy_state:
+                update_strategy_state({
+                    "candidate_exemplars": candidate_exemplars,
+                    "bootstrap_done": True,
+                    "bootstrap_eval_tokens": _bootstrap_eval_tokens,
+                    "iters_done": i + 1,
+                    "current_instruction": current_instruction,
+                    "current_examples": current_examples,
+                    "fewshot_iter_state": {},
+                })
+            _iter_state = {}
+            if on_iteration:
+                on_iteration(record)
 
         best = max(iterations, key=lambda r: r.score)
         return OptimizationResult(
@@ -228,62 +345,102 @@ def _bootstrap_exemplars(
     metrics: list[Any],
     run_config: Any,
     pool_size: int,
-) -> list[dict[str, str]]:
-    """Run eval and extract top-scoring samples as candidate exemplars.
+    partial_candidates: list | None = None,
+    on_sample: Any | None = None,
+) -> tuple[list[dict[str, str]], int]:
+    """Run eval sample-by-sample and extract top-scoring samples as candidate exemplars.
 
-    Returns a list of dicts: {"input": ..., "output": ..., "score": ...}
+    Evaluates one sample at a time so partial results survive interruption.
+    Already-scored samples (partial_candidates) are skipped on resume.
+
+    Returns (candidates, total_eval_tokens) so callers can account for inference cost.
     """
     from aevyra_verdict import Dataset, EvalRunner
     from aevyra_verdict.dataset import Conversation, Message
 
-    # Inject system prompt
-    injected_convos = []
-    for convo in dataset.conversations:
-        messages = list(convo.messages)
-        if messages and messages[0].role == "system":
-            messages[0] = Message(role="system", content=prompt)
-        else:
-            messages.insert(0, Message(role="system", content=prompt))
-        injected_convos.append(Conversation(
-            messages=messages,
-            ideal=convo.ideal,
-            metadata=convo.metadata,
-        ))
+    # Build index of already-scored inputs so we can skip them on resume
+    already_scored_inputs: set[str] = {c["input"] for c in (partial_candidates or [])}
+    scored_samples: list[dict[str, Any]] = list(partial_candidates or [])
+    total_eval_tokens: int = 0
 
-    injected_dataset = Dataset(conversations=injected_convos)
-
-    runner = EvalRunner(config=run_config)
-    for p in providers:
-        runner.add_provider(
-            p["provider_name"],
-            p["model"],
-            label=p.get("label"),
-            api_key=p.get("api_key"),
-            base_url=p.get("base_url"),
-        )
-    for m in metrics:
-        runner.add_metric(m)
-
-    results = runner.run(injected_dataset, show_progress=True)
-
-    # Collect samples with their scores
-    scored_samples: list[dict[str, Any]] = []
-    for _model_label, model_result in results.model_results.items():
-        for idx in range(model_result.num_samples):
-            score = _mean_score(model_result.scores[idx])
-            convo = dataset.conversations[idx]
-            user_input = convo.last_user_message or ""
-            completion = model_result.completions[idx]
-            # Use the ideal answer as the exemplar output (more reliable than model output)
-            output = convo.ideal if convo.ideal else (
-                completion.text if completion else ""
+    def _make_runner() -> EvalRunner:
+        runner = EvalRunner(config=run_config)
+        for p in providers:
+            runner.add_provider(
+                p["provider_name"],
+                p["model"],
+                label=p.get("label"),
+                api_key=p.get("api_key"),
+                base_url=p.get("base_url"),
             )
-            if user_input and output:
-                scored_samples.append({
-                    "input": user_input,
-                    "output": output,
-                    "score": score,
-                })
+        for m in metrics:
+            runner.add_metric(m)
+        return runner
+
+    # Collect remaining (not-yet-scored) conversations in order
+    remaining: list[Any] = []
+    for convo in dataset.conversations:
+        if (convo.last_user_message or "") not in already_scored_inputs:
+            messages = list(convo.messages)
+            if messages and messages[0].role == "system":
+                messages[0] = Message(role="system", content=prompt)
+            else:
+                messages.insert(0, Message(role="system", content=prompt))
+            remaining.append(Conversation(
+                messages=messages,
+                ideal=convo.ideal,
+                metadata=convo.metadata,
+            ))
+
+    n_total = len(dataset.conversations)
+    n_done = n_total - len(remaining)
+
+    from tqdm import tqdm
+
+    if not remaining:
+        # All samples already scored (full resume) — nothing to do
+        pass
+    else:
+        # Run all remaining samples in parallel batches.
+        # Batch size = max_workers so we checkpoint after every batch while
+        # still keeping requests concurrent within each batch.
+        batch_size = run_config.max_workers or 4
+        pbar = tqdm(total=n_total, initial=n_done)
+
+        for batch_start in range(0, len(remaining), batch_size):
+            batch = remaining[batch_start: batch_start + batch_size]
+            batch_ds = Dataset(conversations=batch)
+
+            runner = _make_runner()
+            _judge_before = [getattr(m, "judge_tokens_used", 0) for m in metrics]
+            results = runner.run(batch_ds, show_progress=False)
+            total_eval_tokens += sum(mr.total_tokens() for mr in results.model_results.values())
+            for _mi, _m in enumerate(metrics):
+                total_eval_tokens += getattr(_m, "judge_tokens_used", 0) - _judge_before[_mi]
+
+            for _label, model_result in results.model_results.items():
+                for i, convo in enumerate(batch):
+                    user_input = convo.last_user_message or ""
+                    score = _mean_score(model_result.scores[i])
+                    completion = model_result.completions[i]
+                    output = convo.ideal if convo.ideal else (
+                        completion.text if completion else ""
+                    )
+                    if user_input and output:
+                        scored_samples.append({
+                            "input": user_input,
+                            "output": output,
+                            "score": score,
+                        })
+                    already_scored_inputs.add(user_input)
+
+            pbar.update(len(batch))
+
+            # Checkpoint after each batch so resume can skip already-scored ones
+            if on_sample:
+                on_sample(list(scored_samples))
+
+        pbar.close()
 
     # Sort by score descending — top scorers make the best exemplars
     scored_samples.sort(key=lambda s: s["score"], reverse=True)
@@ -298,7 +455,7 @@ def _bootstrap_exemplars(
         if len(unique) >= pool_size:
             break
 
-    return unique
+    return unique, total_eval_tokens
 
 
 def _build_fewshot_prompt(instruction: str, examples: list[dict[str, str]]) -> str:

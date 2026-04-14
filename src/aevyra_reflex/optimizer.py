@@ -110,13 +110,13 @@ def parse_verdict_results(
 # Provider aliases — OpenAI-compatible services that can be used with -m
 # ---------------------------------------------------------------------------
 # Maps alias → (base_url, env_var_for_api_key)
-# When a user writes `-m openrouter/meta-llama/llama-3.1-8b-instruct`, we
-# resolve "openrouter" to the openai provider with the right base_url and key.
+# When a user writes `-m together/meta-llama/llama-3.1-8b-instruct`, we
+# resolve "together" to the openai provider with the right base_url and key.
+#
+# Note: "openrouter" is intentionally NOT listed here — verdict has a native
+# OpenRouterProvider that reads OPENROUTER_API_KEY directly. Aliasing it to
+# the openai provider caused confusing "OPENAI_API_KEY not set" errors.
 PROVIDER_ALIASES: dict[str, dict[str, str]] = {
-    "openrouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "env_key": "OPENROUTER_API_KEY",
-    },
     "together": {
         "base_url": "https://api.together.xyz/v1",
         "env_key": "TOGETHER_API_KEY",
@@ -163,11 +163,12 @@ def _resolve_provider(
     alias = PROVIDER_ALIASES.get(provider_name)
     if alias:
         resolved_base_url = base_url or alias["base_url"]
-        resolved_api_key = api_key or os.environ.get(alias["env_key"]) or os.environ.get("OPENAI_API_KEY")
+        resolved_api_key = api_key or os.environ.get(alias["env_key"])
         if not resolved_api_key:
-            logger.warning(
+            raise ValueError(
                 f"No API key found for {provider_name}. "
-                f"Set {alias['env_key']} or OPENAI_API_KEY."
+                f"Set the {alias['env_key']} environment variable "
+                f"or pass api_key= directly."
             )
         return {
             "provider_name": "openai",
@@ -249,7 +250,12 @@ class OptimizerConfig:
     """Fraction of the dataset used during optimization. The remaining examples
     are held out as a test set and used exclusively for baseline and final eval.
     Set to 1.0 to use the full dataset for everything (no split).
-    Default: 0.8 (80% train / 20% test)."""
+    Default: 0.8 (80% train+val / 20% test).
+
+    A larger test set is preferred over a larger training set because the test
+    set determines statistical significance: ~30 held-out samples are needed for
+    a paired test to reliably detect moderate improvements (p < 0.05). The
+    optimizer needs far fewer training examples to identify failure patterns."""
 
     val_ratio: float = 0.1
     """Fraction of the total dataset reserved as a validation set, carved out of
@@ -599,6 +605,7 @@ class PromptOptimizer:
         callbacks: list[Any] | None = None,
         baseline_override: "EvalSnapshot | None" = None,
         branched_from: dict[str, Any] | None = None,
+        prior_duration_seconds: float = 0.0,
     ) -> OptimizationResult:
         """Run the full optimization workflow: baseline → optimize → verify.
 
@@ -616,6 +623,11 @@ class PromptOptimizer:
                                existing run to avoid re-running the baseline.
             branched_from: Optional dict with ``run_id`` and ``iteration`` keys
                            passed to RunStore.create_run() for lineage tracking.
+            prior_duration_seconds: Elapsed time already spent on this run before
+                                    this session started (e.g. from the parent run
+                                    up to the branching point). Added to every
+                                    elapsed/duration measurement so branch runs
+                                    show cumulative wall time including parent work.
 
         Returns:
             OptimizationResult with baseline/final scores and full history.
@@ -682,6 +694,23 @@ class PromptOptimizer:
             n_val = 0
             n_test = n_train
 
+        # Warn when the split produces unusably small partitions
+        _total_n = len(self._dataset.conversations)
+        if n_train < 10 and train_ratio < 1.0:
+            logger.warning(
+                "Training set is very small (%d examples). With only %d examples the "
+                "optimizer has little signal to work from. Consider using --train-split 1.0 "
+                "to disable splitting, or collecting more data (aim for ≥30 train examples).",
+                n_train, n_train,
+            )
+        if n_test < 8 and train_ratio < 1.0:
+            logger.warning(
+                "Test set is very small (%d examples). Scores will be noisy and the "
+                "significance test won't be reliable. Aim for ≥20 test examples, or use "
+                "--train-split 1.0 to skip the split on small datasets.",
+                n_test,
+            )
+
         if self.config.batch_size > 0:
             effective_batch = min(self.config.batch_size, n_train)
             logger.info(
@@ -708,13 +737,23 @@ class PromptOptimizer:
             Run,
         )
 
+        import time as _time
+        from datetime import datetime, timezone
+        _run_start_monotonic = _time.monotonic()
+        _run_started_at = datetime.now(timezone.utc).isoformat()
+
         run: Run | None = None
         checkpoint: CheckpointState | None = None
+        # Cumulative wall time from prior sessions / parent branch work.
+        # For branch runs this is seeded from the parent iteration's elapsed_seconds.
+        # For resumed runs the checkpoint value takes precedence (it's always >= this).
+        _prior_duration_seconds: float = prior_duration_seconds
 
         if resume_run is not None:
             run = resume_run
             checkpoint = run.load_checkpoint()
             if checkpoint:
+                _prior_duration_seconds = checkpoint.accumulated_duration_seconds
                 logger.info(
                     f"Resuming run {run.run_id} from iteration "
                     f"{checkpoint.completed_iterations} "
@@ -725,7 +764,8 @@ class PromptOptimizer:
             config_dict = asdict(self.config)
             # Persist the eval model names so the dashboard and CLI can show them
             config_dict["_cli_models"] = [
-                p.get("model", p.get("label", "")) for p in self._providers
+                f"{p['provider_name']}/{p.get('model', p.get('label', ''))}"
+                for p in self._providers
             ]
             run = run_store.create_run(
                 config=config_dict,
@@ -734,6 +774,11 @@ class PromptOptimizer:
                 initial_prompt=initial_prompt,
                 branched_from=branched_from,
             )
+
+        # Mark run as actively running; cleared by mark_done() on normal exit,
+        # or left in place on crash (dashboard will then correctly show 'interrupted')
+        if run:
+            run.mark_running()
 
         # --- Step 1: Baseline eval (skip if resuming or branching with a known baseline) ---
         run_tag = f"[run {run.run_id}]" if run else "[run ?]"
@@ -747,25 +792,71 @@ class PromptOptimizer:
                 run.save_baseline({
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
+                    "total_tokens": baseline.total_tokens,
+                    "samples": [
+                        {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                        for s in baseline.samples
+                    ],
                 })
         elif checkpoint and checkpoint.baseline:
             logger.info(f"{tag} Resuming — using saved baseline.")
+            from aevyra_reflex.result import SampleSnapshot
+            raw_samples = checkpoint.baseline.get("samples", [])
             baseline = EvalSnapshot(
                 mean_score=checkpoint.baseline["mean_score"],
                 scores_by_metric=checkpoint.baseline.get("scores_by_metric", {}),
+                total_tokens=checkpoint.baseline.get("total_tokens", 0),
+                samples=[
+                    SampleSnapshot(
+                        input=s.get("input", ""),
+                        response=s.get("response", ""),
+                        ideal=s.get("ideal", ""),
+                        score=s.get("score", 0.0),
+                    )
+                    for s in raw_samples
+                ],
             )
         else:
             eval_runs = self.config.eval_runs
             eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
-            logger.info(f"{tag} Running baseline evaluation{eval_label}...")
+            n_test_samples = len(test_dataset.conversations) if test_dataset else "?"
+            logger.info(f"{tag} Running baseline eval on TEST SET{eval_label} ({n_test_samples} held-out samples)...")
             baseline = self._run_eval(initial_prompt, dataset=test_dataset)
             std_label = f" ± {baseline.std_score:.4f}" if baseline.std_score > 0 else ""
-            logger.info(f"{tag} Baseline score: {baseline.mean_score:.4f}{std_label}")
+            logger.info(f"{tag} Baseline TEST SET score: {baseline.mean_score:.4f}{std_label}")
             if run:
                 run.save_baseline({
                     "mean_score": baseline.mean_score,
                     "scores_by_metric": baseline.scores_by_metric,
+                    "total_tokens": baseline.total_tokens,
+                    "samples": [
+                        {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+                        for s in baseline.samples
+                    ],
                 })
+
+        # Write an initial checkpoint immediately after the baseline so that
+        # a crash during the very first iteration (e.g. mid-variant-eval) still
+        # produces a resumable run.  Without this, checkpoint.json is never
+        # written until the first iteration completes and --resume can't find it.
+        if run and not checkpoint:
+            run.save_checkpoint(CheckpointState(
+                run_id=run.run_id,
+                initial_prompt=initial_prompt,
+                current_prompt=initial_prompt,
+                completed_iterations=0,
+                best_prompt=initial_prompt,
+                best_score=0.0,
+                score_trajectory=[],
+                previous_reasoning="",
+                strategy_state={},
+                baseline={
+                    "mean_score": baseline.mean_score,
+                    "scores_by_metric": baseline.scores_by_metric,
+                    "total_tokens": baseline.total_tokens,
+                },
+                accumulated_duration_seconds=_prior_duration_seconds,
+            ))
 
         # --- Step 2: Optimization loop ---
         llm = LLM(
@@ -781,17 +872,83 @@ class PromptOptimizer:
         strategy_cls = get_strategy(self.config.strategy)
         strategy = strategy_cls()
 
+        # Restore per-iteration state from saved files when resuming.
+        # This reconstructs val_history (for early stopping), token totals (for accurate
+        # reporting), and best-val tracking — all of which start from zero otherwise.
+        _resumed_val_history: list[float] = []
+        _resumed_eval_tokens: int = 0
+        _resumed_reasoning_tokens: int = 0
+        # Full val trajectory across ALL phases — never cleared unlike val_history
+        # which resets at each phase boundary for per-phase early stopping.
+        _val_trajectory_all: list[float] = []
+        if checkpoint and run:
+            for it in run.load_iterations():
+                if it.val_score is not None:
+                    _resumed_val_history.append(it.val_score)
+                    _val_trajectory_all.append(it.val_score)
+                _resumed_eval_tokens += it.eval_tokens
+                _resumed_reasoning_tokens += it.reasoning_tokens
+            _baseline_tok = checkpoint.baseline.get("total_tokens", 0) if checkpoint and checkpoint.baseline else 0
+            if _baseline_tok or _resumed_eval_tokens or _resumed_reasoning_tokens:
+                def _fmtk(n: int) -> str:
+                    return f"{n / 1000:.1f}K" if n >= 1000 else str(n)
+                logger.info(
+                    f"Tokens so far: eval={_fmtk(_baseline_tok + _resumed_eval_tokens)}  "
+                    f"reasoning={_fmtk(_resumed_reasoning_tokens)}"
+                )
+
+        # Restore best_val state from checkpoint (saved each iteration)
+        _resumed_best_val_prompt: str = checkpoint.best_val_prompt if (checkpoint and checkpoint.best_val_prompt) else (checkpoint.current_prompt if checkpoint else initial_prompt)
+        _resumed_best_val_score: float = checkpoint.best_val_score if checkpoint else -1.0
+        _resumed_best_val_iter: int = checkpoint.best_val_iter if checkpoint else 0
+        # Restore global best-val (falls back to per-phase best-val for old checkpoints)
+        _resumed_global_best_val_prompt: str = (
+            checkpoint.global_best_val_prompt if (checkpoint and checkpoint.global_best_val_prompt)
+            else _resumed_best_val_prompt
+        )
+        _resumed_global_best_val_score: float = (
+            checkpoint.global_best_val_score if checkpoint else -1.0
+        )
+        _resumed_global_best_val_iter: int = (
+            checkpoint.global_best_val_iter if checkpoint else 0
+        )
+        # Reconstruct the train score at the best-val iteration from saved iteration files
+        _resumed_best_val_train_score: float = -1.0
+        _resumed_global_best_val_train_score: float = -1.0
+        if checkpoint and run and (_resumed_best_val_iter > 0 or _resumed_global_best_val_iter > 0):
+            for it in run.load_iterations():
+                if it.iteration == _resumed_best_val_iter:
+                    _resumed_best_val_train_score = it.score
+                if it.iteration == _resumed_global_best_val_iter:
+                    _resumed_global_best_val_train_score = it.score
+
         # Shared mutable state for val tracking and early stopping
         _es: dict[str, Any] = {
-            "val_history": [],           # val score per iteration
+            "val_history": _resumed_val_history,  # val score per iteration (restored on resume)
             "iterations": [],            # IterationRecord objects collected
             "best_train_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
             "best_train_score": checkpoint.best_score if checkpoint else -1.0,
-            "best_val_prompt": checkpoint.current_prompt if checkpoint else initial_prompt,
-            "best_val_score": -1.0,
+            # per-phase best-val: reset at each phase transition for early stopping
+            "best_val_prompt": _resumed_best_val_prompt,
+            "best_val_score": _resumed_best_val_score,
+            "best_val_train_score": _resumed_best_val_train_score,  # train score at best-val iter
+            "best_val_iter": _resumed_best_val_iter,  # global iteration number of best val
+            # global best-val: never reset; tracks best val across all phases and resumes
+            "global_best_val_prompt": _resumed_global_best_val_prompt,
+            "global_best_val_score": _resumed_global_best_val_score,
+            "global_best_val_iter": _resumed_global_best_val_iter,
+            "global_best_val_train_score": _resumed_global_best_val_train_score,
             "trajectory": list(checkpoint.score_trajectory) if checkpoint else [],
             "strategy_state": dict(checkpoint.strategy_state) if checkpoint and checkpoint.strategy_state else {},
+            "total_reasoning_tokens": _resumed_reasoning_tokens,  # seeded from saved iterations on resume
+            "total_eval_tokens": baseline.total_tokens + _resumed_eval_tokens,  # baseline + prior iterations
         }
+
+        def _fmt_k(n: int) -> str:
+            """Format token count as e.g. 1.2K."""
+            if n < 1000:
+                return str(n)
+            return f"{n / 1000:.1f}K"
 
         # Wrap the on_iteration callback to save checkpoints and run val eval
         def _checkpointing_callback(record):
@@ -811,21 +968,8 @@ class PromptOptimizer:
                     except Exception:
                         logger.exception(f"Callback {cb!r} raised in on_iteration")
             if run:
-                # Save iteration
-                run.save_iteration(IterationState(
-                    iteration=record.iteration,
-                    system_prompt=record.system_prompt,
-                    score=record.score,
-                    scores_by_metric=record.scores_by_metric,
-                    reasoning=record.reasoning,
-                    eval_tokens=getattr(record, "eval_tokens", 0),
-                    reasoning_tokens=getattr(record, "reasoning_tokens", 0),
-                    change_summary=getattr(record, "change_summary", ""),
-                    val_score=getattr(record, "val_score", None),
-                    is_full_eval=getattr(record, "is_full_eval", False),
-                ))
                 _es["trajectory"].append(record.score)
-                # Update checkpoint
+                # Update checkpoint (iteration saved after val eval below)
                 run.save_checkpoint(CheckpointState(
                     run_id=run.run_id,
                     initial_prompt=initial_prompt,
@@ -839,48 +983,149 @@ class PromptOptimizer:
                     baseline={
                         "mean_score": baseline.mean_score,
                         "scores_by_metric": baseline.scores_by_metric,
+                        "total_tokens": baseline.total_tokens,
                     },
+                    best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
+                    best_val_score=_es["best_val_score"],
+                    best_val_iter=_es["best_val_iter"],
+                    global_best_val_prompt=_es["global_best_val_prompt"] if val_dataset else None,
+                    global_best_val_score=_es["global_best_val_score"],
+                    global_best_val_iter=_es["global_best_val_iter"],
+                    accumulated_duration_seconds=_prior_duration_seconds + _time.monotonic() - _run_start_monotonic,
                 ))
+
 
             # --- Validation eval + early stopping ---
             if val_dataset is not None:
                 val_snap = self._run_eval_single(record.system_prompt, dataset=val_dataset)
                 val_score = val_snap.mean_score
                 _es["val_history"].append(val_score)
+                _val_trajectory_all.append(val_score)  # never cleared — for final summary
                 record.val_score = val_score
 
                 # Track best val prompt (the one least prone to overfitting)
                 if val_score >= _es["best_val_score"]:
                     _es["best_val_score"] = val_score
+                    _es["best_val_train_score"] = record.score
                     _es["best_val_prompt"] = record.system_prompt
+                    _es["best_val_iter"] = record.iteration
+                # Also update global best-val (never reset between phases)
+                if val_score >= _es["global_best_val_score"]:
+                    _es["global_best_val_score"] = val_score
+                    _es["global_best_val_prompt"] = record.system_prompt
+                    _es["global_best_val_iter"] = record.iteration
+                    _es["global_best_val_train_score"] = record.score
 
-                logger.info(
-                    f"{tag} Iteration {record.iteration}: "
-                    f"train={record.score:.4f}  val={val_score:.4f}"
+            # Save iteration after val eval so val_score is included
+            if run:
+                _iter_elapsed = _prior_duration_seconds + _time.monotonic() - _run_start_monotonic
+                run.save_iteration(IterationState(
+                    iteration=record.iteration,
+                    system_prompt=record.system_prompt,
+                    score=record.score,
+                    scores_by_metric=record.scores_by_metric,
+                    reasoning=record.reasoning,
+                    eval_tokens=getattr(record, "eval_tokens", 0),
+                    reasoning_tokens=getattr(record, "reasoning_tokens", 0),
+                    change_summary=getattr(record, "change_summary", ""),
+                    val_score=getattr(record, "val_score", None),
+                    is_full_eval=getattr(record, "is_full_eval", False),
+                    elapsed_seconds=round(_iter_elapsed, 1),
+                ))
+
+                r_tok = getattr(record, "reasoning_tokens", 0)
+                e_tok = getattr(record, "eval_tokens", 0)
+                _es["total_reasoning_tokens"] += r_tok
+                _es["total_eval_tokens"] += e_tok
+                tok_parts = []
+                if e_tok:
+                    tok_parts.append(f"eval={_fmt_k(e_tok)} (total {_fmt_k(_es['total_eval_tokens'])})")
+                if r_tok:
+                    tok_parts.append(f"reason={_fmt_k(r_tok)} (total {_fmt_k(_es['total_reasoning_tokens'])})")
+                tok_str = ("  " + "  ".join(tok_parts)) if tok_parts else ""
+                _el_m, _el_s = divmod(int(_iter_elapsed), 60)
+                _el_h, _el_m = divmod(_el_m, 60)
+                _el_label = (
+                    f"{_el_h}h {_el_m}m {_el_s}s" if _el_h
+                    else f"{_el_m}m {_el_s}s" if _el_m
+                    else f"{_el_s}s"
                 )
+                if val_dataset is not None:
+                    logger.info(
+                        f"{tag} Iteration {record.iteration}: "
+                        f"train={record.score:.4f}  val={val_score:.4f}{tok_str}  [{_el_label}]"
+                    )
+                else:
+                    logger.info(
+                        f"{tag} Iteration {record.iteration}: "
+                        f"train={record.score:.4f}{tok_str}  [{_el_label}]"
+                    )
 
                 # Check early stopping condition
                 patience = self.config.early_stopping_patience
                 if patience > 0 and len(_es["val_history"]) >= patience:
-                    best_val_overall = max(_es["val_history"])
-                    # Index of last best-val iteration
-                    best_val_idx = len(_es["val_history"]) - 1 - next(
+                    best_val_overall = _es["best_val_score"]
+                    best_val_iter = _es["best_val_iter"]
+                    # Count how many consecutive iterations have not beaten the best val.
+                    # reversed_index=0 means the current iteration IS the best → 0 iters since best.
+                    iters_since_best = next(
                         i for i, v in enumerate(reversed(_es["val_history"]))
                         if v == best_val_overall
                     )
-                    iters_since_best = len(_es["val_history"]) - 1 - best_val_idx
                     if iters_since_best >= patience:
                         logger.info(
                             f"{tag} Early stopping triggered: val score has not improved "
                             f"for {patience} consecutive iteration(s) "
-                            f"(best val {best_val_overall:.4f} at iteration {best_val_idx + 1}). "
-                            f"Using prompt from iteration {best_val_idx + 1}."
+                            f"(best val {best_val_overall:.4f} at iteration {best_val_iter}). "
+                            f"Using prompt from iteration {best_val_iter}."
                         )
                         raise _EarlyStop()
 
         def _update_strategy_state(state: dict) -> None:
-            """Called by strategies to persist phase/iteration state into checkpoints."""
+            """Called by strategies to persist phase/iteration state into checkpoints.
+
+            Flushes immediately to disk so that bootstrap progress and other
+            between-iteration state (phase advances, sub-strategy state) survive
+            a crash before the next full iteration checkpoint is written.
+
+            Special key: ``_reset_val_history`` — if True, clears the val history
+            and best-val tracking so early stopping starts fresh for the new phase.
+            """
+            if state.pop("_reset_val_history", False):
+                _es["val_history"].clear()
+                _es["best_val_score"] = -1.0
+                _es["best_val_iter"] = 0
+                _es["best_val_prompt"] = _es["best_train_prompt"]
+                _es["best_val_train_score"] = -1.0
+                logger.debug("[early stopping] val history reset for new phase")
             _es["strategy_state"].update(state)
+            if run:
+                # Use the completed_iterations from the last real iteration so
+                # the resume banner stays accurate.
+                _completed = (
+                    _es["iterations"][-1].iteration if _es["iterations"]
+                    else (checkpoint.completed_iterations if checkpoint else 0)
+                )
+                run.save_checkpoint(CheckpointState(
+                    run_id=run.run_id,
+                    initial_prompt=initial_prompt,
+                    current_prompt=_es["best_train_prompt"],
+                    completed_iterations=_completed,
+                    best_prompt=_es["best_train_prompt"],
+                    best_score=_es["best_train_score"],
+                    score_trajectory=list(_es["trajectory"]),
+                    previous_reasoning=(_es["iterations"][-1].reasoning if _es["iterations"] else ""),
+                    strategy_state=dict(_es["strategy_state"]),
+                    baseline={
+                        "mean_score": baseline.mean_score,
+                        "scores_by_metric": baseline.scores_by_metric,
+                        "total_tokens": baseline.total_tokens,
+                    },
+                    best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
+                    best_val_score=_es["best_val_score"],
+                    best_val_iter=_es["best_val_iter"],
+                    accumulated_duration_seconds=_prior_duration_seconds + _time.monotonic() - _run_start_monotonic,
+                ))
 
         _early_stopped = False
         try:
@@ -898,7 +1143,7 @@ class PromptOptimizer:
         except _EarlyStop:
             _early_stopped = True
             # Build a partial result from what we've collected so far
-            best_prompt = _es["best_val_prompt"] if val_dataset else _es["best_train_prompt"]
+            best_prompt = _es["global_best_val_prompt"] if val_dataset else _es["best_train_prompt"]
             best_score = _es["best_val_score"] if val_dataset else _es["best_train_score"]
             from aevyra_reflex.result import OptimizationResult as _OR
             result = _OR(
@@ -911,9 +1156,31 @@ class PromptOptimizer:
         # --- Step 3: Final verification eval (on held-out test set) ---
         eval_runs = self.config.eval_runs
         eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
-        logger.info(f"{tag} Running final verification{eval_label}...")
-        final = self._run_eval(result.best_prompt, dataset=test_dataset)
-        logger.info(f"{tag} Final score: {final.mean_score:.4f}  (baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})")
+        n_test_samples = len(test_dataset.conversations) if test_dataset else "?"
+        # Select the prompt to test: when a val set was used, prefer the
+        # prompt with the best val score (least likely to be overfit to train).
+        # Fall back to the best-train prompt if val tracking was never updated.
+        if val_dataset is not None and _es["global_best_val_score"] > -1.0:
+            prompt_for_test = _es["global_best_val_prompt"]
+            _bv_iter = _es["global_best_val_iter"]
+            _bv_train = _es["global_best_val_train_score"]
+            _bv_val = _es["global_best_val_score"]
+            _bv_label = (
+                f"iter {_bv_iter}: train={_bv_train:.4f}, val={_bv_val:.4f}"
+                if _bv_train > -1.0 else f"iter {_bv_iter}: val={_bv_val:.4f}"
+            )
+            logger.info(
+                f"{tag} Running TEST SET eval{eval_label} on best-val prompt "
+                f"({_bv_label}) — {n_test_samples} held-out samples..."
+            )
+        else:
+            prompt_for_test = result.best_prompt
+            logger.info(f"{tag} Running TEST SET eval{eval_label} ({n_test_samples} held-out samples)...")
+        final = self._run_eval(prompt_for_test, dataset=test_dataset)
+        logger.info(
+            f"{tag} TEST SET score: {final.mean_score:.4f}  "
+            f"(baseline: {baseline.mean_score:.4f}  delta: {final.mean_score - baseline.mean_score:+.4f})"
+        )
 
         # Attach baseline, final, and strategy info to result
         result.baseline = baseline
@@ -935,7 +1202,7 @@ class PromptOptimizer:
         # Record validation split info
         if n_val > 0:
             result.val_size = n_val
-            result.val_trajectory = list(_es["val_history"])
+            result.val_trajectory = _val_trajectory_all
         result.early_stopped = _early_stopped
 
         # Record mini-batch size when active
@@ -950,18 +1217,41 @@ class PromptOptimizer:
             sig_label = "✓ significant" if is_sig else "✗ not significant"
             logger.info(f"{tag} Significance: p={p_val:.4f} ({sig_label} at α=0.05)")
 
-        # Accumulate token counts across all phases
+        # LLM-generated post-run analysis
+        try:
+            logger.info(f"{tag} Generating run analysis...")
+            what_happened_prompt = _build_what_happened_prompt(result)
+            result.what_happened = llm.generate(what_happened_prompt, temperature=0.3)
+        except Exception:
+            logger.debug("Failed to generate what_happened analysis", exc_info=True)
+
+        # Accumulate token counts across all phases.
+        # _resumed_eval_tokens / _resumed_reasoning_tokens carry pre-interruption totals
+        # for resumed runs (0 for fresh runs), ensuring accuracy across multiple resumes.
         result.total_eval_tokens = (
             baseline.total_tokens
+            + _resumed_eval_tokens
             + sum(getattr(r, "eval_tokens", 0) for r in result.iterations)
             + final.total_tokens
         )
-        result.total_reasoning_tokens = llm.tokens_used
+        result.total_reasoning_tokens = _resumed_reasoning_tokens + llm.tokens_used
 
         # Save final result
+        _total_seconds = _prior_duration_seconds + _time.monotonic() - _run_start_monotonic
+        result.duration_seconds = round(_total_seconds, 2)
         if run:
-            run.save_result(result.to_dict())
-            logger.info(f"Run {run.run_id} saved to {run.run_dir}")
+            result_dict = result.to_dict()
+            result_dict["duration_seconds"] = round(_total_seconds, 2)
+            result_dict["started_at"] = _run_started_at
+            run.save_result(result_dict)
+            _dur_m, _dur_s = divmod(int(_total_seconds), 60)
+            _dur_h, _dur_m = divmod(_dur_m, 60)
+            _dur_label = (
+                f"{_dur_h}h {_dur_m}m {_dur_s}s" if _dur_h
+                else f"{_dur_m}m {_dur_s}s" if _dur_m
+                else f"{_dur_s}s"
+            )
+            logger.info(f"Run {run.run_id} saved to {run.run_dir}  (total duration: {_dur_label})")
 
         # Fire on_run_end
         for cb in _callbacks:
@@ -970,6 +1260,10 @@ class PromptOptimizer:
                     cb.on_run_end(result)
                 except Exception:
                     logger.exception(f"Callback {cb!r} raised in on_run_end")
+
+        # Clear running sentinel so dashboard shows 'completed' not 'running'
+        if run:
+            run.mark_done()
 
         return result
 
@@ -1070,6 +1364,9 @@ class PromptOptimizer:
         for m in self._metrics:
             runner.add_metric(m)
 
+        # Snapshot judge token counters before running so we can compute the delta
+        _judge_tokens_before = [getattr(m, "judge_tokens_used", 0) for m in self._metrics]
+
         results = runner.run(ds, show_progress=True)
 
         # Aggregate scores and capture per-sample data
@@ -1106,6 +1403,11 @@ class PromptOptimizer:
         total_tokens = sum(
             mr.total_tokens() for mr in results.model_results.values()
         )
+        # Also count tokens used by any LLM judge metrics (scored separately,
+        # not part of model_results). Use the delta since _judge_tokens_before
+        # to avoid double-counting across multiple eval calls.
+        for m, before in zip(self._metrics, _judge_tokens_before):
+            total_tokens += getattr(m, "judge_tokens_used", 0) - before
 
         return EvalSnapshot(
             mean_score=mean,
@@ -1173,10 +1475,15 @@ class PromptOptimizer:
         import math
 
         if not baseline.samples or not final.samples:
+            logger.debug(
+                "Significance test skipped: baseline_samples=%d final_samples=%d",
+                len(baseline.samples), len(final.samples),
+            )
             return None, None
 
         n = min(len(baseline.samples), len(final.samples))
         if n < 2:
+            logger.debug("Significance test skipped: only %d paired samples (need ≥2)", n)
             return None, None
 
         b_scores = [s.score for s in baseline.samples[:n]]
@@ -1185,6 +1492,7 @@ class PromptOptimizer:
 
         # All identical — test undefined
         if all(d == 0.0 for d in diffs):
+            logger.debug("Significance test skipped: all per-sample differences are zero")
             return None, None
 
         # --- Try scipy Wilcoxon signed-rank test (non-parametric, no normality assumption) ---
@@ -1194,11 +1502,16 @@ class PromptOptimizer:
             return float(p_value), bool(p_value < 0.05)
         except ImportError:
             pass
+        except Exception as exc:
+            # Wilcoxon can raise ValueError with small n or degenerate differences
+            # (e.g. too many ties, only 1 non-zero diff). Fall through to t-test.
+            logger.debug("Wilcoxon test failed (%s: %s), falling back to t-test", type(exc).__name__, exc)
 
         # --- Fallback: manual paired t-test ---
         mean_d = sum(diffs) / n
         var_d = sum((d - mean_d) ** 2 for d in diffs) / (n - 1) if n > 1 else 0.0
         if var_d == 0.0:
+            logger.debug("Significance test skipped: zero variance in differences")
             return None, None
         t_stat = mean_d / math.sqrt(var_d / n)
 
@@ -1271,3 +1584,153 @@ def _beta_inc_approx(x: float, a: float, b: float) -> float:  # noqa: N802
 
     # Two-tailed p-value
     return float(min(2.0 * ibeta, 1.0))
+
+
+def _build_what_happened_prompt(result: "OptimizationResult") -> str:  # type: ignore[name-defined]
+    """Build the prompt sent to the reasoning model to generate WHAT HAPPENED.
+
+    The prompt is constructed from the actual run data so the analysis is
+    specific to *this* run rather than a generic template.
+    """
+    r = result
+
+    baseline_score = r.baseline.mean_score if r.baseline else 0.0
+    final_score = r.final.mean_score if r.final else (r.best_score or 0.0)
+    improvement = final_score - baseline_score
+    improvement_pct = (improvement / baseline_score * 100) if baseline_score > 0 else 0.0
+    n_iters = len(r.iterations)
+    strategy = r.strategy_name or "unknown"
+    traj = [f"{s:.3f}" for s in r.score_trajectory]
+
+    # Build score trajectory context
+    traj_str = " → ".join(traj) if traj else "(none)"
+    val_traj_str = ""
+    if r.val_trajectory:
+        val_traj_str = " → ".join(f"{s:.3f}" for s in r.val_trajectory)
+
+    # Dataset split info
+    split_info = ""
+    if r.train_size and r.test_size:
+        if r.val_size:
+            split_info = f"{r.train_size} train / {r.val_size} val / {r.test_size} test samples"
+        else:
+            split_info = f"{r.train_size} train / {r.test_size} test samples"
+    elif r.train_size:
+        split_info = f"{r.train_size} samples"
+
+    # Significance
+    sig_str = ""
+    if r.p_value is not None:
+        sig_str = (
+            f"p={r.p_value:.4f} ({'significant' if r.is_significant else 'not significant'} at α=0.05)"
+        )
+
+    # Phase history (auto mode)
+    phase_lines = ""
+    if r.phase_history:
+        parts = []
+        for ph in r.phase_history:
+            axis = ph.get("axis", "?")
+            before = ph.get("score_before", 0.0)
+            after = ph.get("score_after", 0.0)
+            delta = after - before
+            sign = "+" if delta >= 0 else ""
+            parts.append(f"  Phase {ph.get('phase', '?')} ({axis}): {before:.4f} → {after:.4f} ({sign}{delta:.4f})")
+        phase_lines = "\n".join(parts)
+
+    # Failing sample examples (up to 3 worst-performing from final eval)
+    failing_examples = ""
+    if r.final and r.final.samples:
+        sorted_samples = sorted(r.final.samples, key=lambda s: s.score)
+        worst = sorted_samples[:3]
+        parts = []
+        for i, s in enumerate(worst, 1):
+            inp = s.input[:300].replace("\n", " ") if s.input else "(no input)"
+            resp = s.response[:200].replace("\n", " ") if s.response else "(no response)"
+            ideal = s.ideal[:200].replace("\n", " ") if s.ideal else "(no ideal)"
+            parts.append(
+                f"  [{i}] score={s.score:.3f}\n"
+                f"      input  : {inp}\n"
+                f"      actual : {resp}\n"
+                f"      ideal  : {ideal}"
+            )
+        failing_examples = "\n".join(parts)
+
+    # Change summaries — grouped by qualitative category, not iteration number.
+    # Deduplicate similar summaries so the LLM sees patterns, not a numbered list.
+    change_log = ""
+    if r.iterations:
+        changes = [rec.change_summary for rec in r.iterations if rec.change_summary]
+        if changes:
+            change_log = "\n".join(f"  - {c}" for c in changes)
+
+    # Identify which changes correlated with score gains vs drops
+    positive_changes: list[str] = []
+    negative_changes: list[str] = []
+    if r.iterations:
+        for i in range(1, len(r.iterations)):
+            prev = r.iterations[i - 1].score
+            curr = r.iterations[i].score
+            summary = r.iterations[i].change_summary
+            if not summary:
+                continue
+            if curr > prev + 0.005:
+                positive_changes.append(summary)
+            elif curr < prev - 0.005:
+                negative_changes.append(summary)
+
+    effective_log = ""
+    if positive_changes:
+        effective_log += "Changes that raised the score:\n" + "\n".join(f"  - {c}" for c in positive_changes)
+    if negative_changes:
+        if effective_log:
+            effective_log += "\n"
+        effective_log += "Changes that hurt the score:\n" + "\n".join(f"  - {c}" for c in negative_changes)
+
+    # Early stopping
+    early_stop_note = ""
+    if r.early_stopped:
+        early_stop_note = "Yes — validation score plateaued before max iterations."
+
+    # Convergence
+    converged_note = "Yes — met the score threshold." if r.converged else "No."
+
+    # Build the full context block
+    context_parts = [
+        f"Strategy     : {strategy}",
+        f"Iterations   : {n_iters}",
+        f"Dataset split: {split_info}" if split_info else "",
+        f"Baseline     : {baseline_score:.4f}",
+        f"Final        : {final_score:.4f}  ({'+' if improvement >= 0 else ''}{improvement:.4f}, {'+' if improvement_pct >= 0 else ''}{improvement_pct:.1f}%)",
+        f"Converged    : {converged_note}",
+        f"Significance : {sig_str}" if sig_str else "",
+        f"Train traj   : {traj_str}",
+        f"Val traj     : {val_traj_str}" if val_traj_str else "",
+        f"Early stop   : {early_stop_note}" if early_stop_note else "",
+    ]
+    context = "\n".join(line for line in context_parts if line)
+
+    prompt = f"""You are analyzing the results of a prompt optimization run. Write the "WHAT HAPPENED" section — a concise, specific post-run analysis for the user.
+
+--- RUN SUMMARY ---
+{context}
+
+--- WHAT EACH CHANGE DID ---
+{effective_log if effective_log else change_log if change_log else "(no per-iteration change summaries available)"}
+{f"--- PHASE BREAKDOWN (auto strategy) ---{chr(10)}{phase_lines}" if phase_lines else ""}
+--- WORST-PERFORMING SAMPLES FROM FINAL EVAL ---
+{failing_examples if failing_examples else "(no sample-level data available)"}
+
+--- INSTRUCTIONS ---
+Write exactly 2–3 short paragraphs. Be direct and specific. Rules:
+
+- NEVER mention iteration numbers (e.g. "iteration 4", "iter 6"). Talk about *types* of changes: "adding structure", "tightening constraints", "adding explicit examples", etc.
+- Paragraph 1: What worked and why. What kind of prompt change moved the score, and what does that tell us about the model's relationship to this task?
+- Paragraph 2: What failed and why. What kinds of changes hurt or plateaued? What do the worst samples tell us about where the prompt still breaks down?
+- Paragraph 3: One honest diagnosis of the ceiling (prompt problem vs model capability problem) and 1–2 specific next steps grounded in what you saw.
+- Do NOT use bullet points. Plain prose only.
+- Do NOT be generic — every sentence must be grounded in the data above.
+- Do NOT start with "The optimizer".
+- Keep it under 200 words total.
+"""
+    return prompt

@@ -241,6 +241,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
         branch_meta = config_dict.get("_branch")
         baseline_override = None
         branched_from = None
+        branch_prior_duration: float = 0.0
         if branch_meta:
             from aevyra_reflex.result import EvalSnapshot
             parent_bl = branch_meta["baseline"]
@@ -252,6 +253,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
                 "run_id": branch_meta["parent_run_id"],
                 "iteration": branch_meta["parent_iteration"],
             }
+            branch_prior_duration = float(branch_meta.get("prior_duration_seconds", 0.0))
             push("queued", message=(
                 f"Branch from run {branch_meta['parent_run_id']} "
                 f"iter {branch_meta['parent_iteration']} — "
@@ -282,6 +284,7 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             run_store=store,
             baseline_override=baseline_override,
             branched_from=branched_from,
+            prior_duration_seconds=branch_prior_duration,
         )
 
         # Grab the run_id from the latest entry in the store
@@ -406,10 +409,25 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         iterations = run.load_iterations()
         log_entries = run.load_log()
 
+        # Compute status the same way list_runs() does so the JS doesn't have
+        # to re-implement the logic and hit the same edge cases.
+        _is_running = run.is_running
+        _has_stale_sentinel = run.running_path.exists() and not _is_running
+        if run.is_complete:
+            _status = "completed"
+        elif _is_running:
+            _status = "running"
+        elif run.has_checkpoint or _has_stale_sentinel:
+            _status = "interrupted"
+        else:
+            _status = "running"
+
         data: dict[str, Any] = {
             "run_id": run.run_id,
             "run_dir": str(run.run_dir),
             "is_complete": run.is_complete,
+            "is_running": _is_running,
+            "status": _status,
             "config": config,
             "baseline": baseline,
             "iterations": [
@@ -575,7 +593,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         parent_config = parent_run.load_config()
         opt_config = parent_config.get("optimizer_config", {})
 
-        # Build a merged config_dict for the branch job — override strategy + iters
+        # Build a merged config_dict for the branch job — override strategy + iters.
+        # reasoning_model is stored as just the model name in opt_config; we need
+        # to reconstruct the full "provider/model" string that _run_job expects.
+        _r_provider = opt_config.get("reasoning_provider") or ""
+        _r_model = opt_config.get("reasoning_model") or ""
+        _reasoning_raw = f"{_r_provider}/{_r_model}" if _r_provider else _r_model
+
         branch_config = {
             "dataset_path": parent_config.get("dataset_path", ""),
             "prompt": target.system_prompt,
@@ -583,7 +607,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             "strategy": strategy,
             "max_iterations": max_iterations,
             "score_threshold": opt_config.get("score_threshold", 0.85),
-            "reasoning_model": opt_config.get("reasoning_model", ""),
+            "reasoning_model": _reasoning_raw,
+            "reasoning_base_url": opt_config.get("reasoning_base_url") or "",
             "metrics": opt_config.get("metrics", ["rouge"]),
             "judge": opt_config.get("judge", ""),
             "judge_criteria": opt_config.get("judge_criteria", ""),
@@ -593,6 +618,7 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 "parent_run_id": parent_run_id,
                 "parent_iteration": int(parent_iteration),
                 "baseline": parent_baseline,
+                "prior_duration_seconds": getattr(target, "elapsed_seconds", 0.0),
             },
         }
 

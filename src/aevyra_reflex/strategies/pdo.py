@@ -208,8 +208,7 @@ class PDOStrategy(Strategy):
                 ),
             )
             iterations.append(record)
-            if on_iteration:
-                on_iteration(record)
+            # NOTE: on_iteration is called AFTER reasoning_tokens is set below
 
             if record.score > best_score:
                 best_score = record.score
@@ -244,6 +243,10 @@ class PDOStrategy(Strategy):
 
             # Capture reasoning tokens consumed this round (dueling judges + mutations)
             record.reasoning_tokens = agent.tokens_used - reasoning_before
+
+            # Fire callback now that reasoning_tokens is populated
+            if on_iteration:
+                on_iteration(record)
 
             # Prune worst performers if pool gets too large
             if len(pool) > pdo_config.max_pool_size:
@@ -436,6 +439,7 @@ def _run_duel(
     run_config = RunConfig(
         temperature=config.eval_temperature,
         max_tokens=config.max_tokens,
+        max_workers=config.max_workers,
     )
 
     def _eval_prompt(prompt: str) -> list[str]:

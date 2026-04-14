@@ -1,22 +1,23 @@
 ---
 title: Introduction
-description: Lightweight agentic prompt optimization — one install, one command, no config files.
+description: Agentic prompt optimization built for production workloads — crash-safe, resumable, and fully auditable.
 ---
 
-aevyra-reflex is a lightweight prompt optimizer. Give it a dataset, a system
-prompt, and a target score — it diagnoses why your model is underperforming,
-reasons about the failure patterns, and rewrites the prompt until scores match
-your target.
-
-**No YAML. No framework dependencies. No separate server to deploy.** Just
-`pip install aevyra-reflex` and a single command.
+aevyra-reflex takes your dataset and prompt, runs evals, diagnoses why scores
+are falling short, and rewrites the prompt — iterating until it converges. Runs
+can be interrupted and resumed at any point without losing work, and every token
+spent is tracked across sessions. Every rewrite is accompanied by a reasoned
+explanation of what changed and why — prompt diffs, score attributions, and the
+full reasoning trace are persisted as a durable audit trail.
 
 ```bash
 pip install aevyra-reflex
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
 ```
 
-All evaluation runs through [aevyra-verdict](https://github.com/aevyraai/verdict).
+Works with any model — local Ollama or vLLM, OpenAI, Anthropic, Gemini, or
+any OpenAI-compatible endpoint. All evaluation runs through
+[aevyra-verdict](https://github.com/aevyraai/verdict).
 
 ## Dashboard
 
@@ -31,25 +32,25 @@ trajectory charts, prompt diffs, reasoning analysis, and token usage. Branch
 from any iteration to continue with a different strategy.
 
 <CardGroup cols={2}>
-  <Card title="Open the dashboard" icon="chart-line" href="/docs/dashboard">
+  <Card title="Open the dashboard" icon="chart-line" href="/reflex/dashboard">
     Score charts, prompt diffs, reasoning traces, and branch runs
   </Card>
-  <Card title="Quick start" icon="bolt" href="/docs/quickstart">
+  <Card title="Quick start" icon="bolt" href="/reflex/quickstart">
     Optimize your first prompt in under 5 minutes
   </Card>
 </CardGroup>
 
 ## Why reflex
 
+**No config files.** No YAML. No framework to learn. Point it at a dataset and
+a prompt file and it runs.
+
 **Lightweight.** No heavy framework dependencies. Just Python, standard
 library, and `numpy` for PDO math. Installs in seconds and has no opinion
 about the rest of your stack.
 
-**Zero config.** No YAML files, no project setup, no adapter classes to write.
-Point it at a JSONL file and a prompt file and it runs.
-
-**Fully local.** Ollama is a first-class citizen. Use a local reasoning model
-so nothing leaves your machine:
+**Fully local.** Ollama and vLLM are supported — run everything on your own
+hardware so nothing leaves your machine:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
@@ -62,15 +63,29 @@ made a change — you learn from the run, not just get an output. The causal
 rewrite log tracks what helped, what had no effect, and what hurt, so the model
 avoids repeating dead ends.
 
+**Crash-safe resumption.** Every iteration is checkpointed to disk as it
+completes. Kill the process, restart the machine, lose your connection —
+`--resume` picks up exactly where it left off. Val history, best-prompt
+selection, and token totals are all restored correctly across as many
+interruptions as you need.
+
+**Full token accounting.** Eval tokens and reasoning tokens are tracked per
+iteration and accumulated across sessions, including resumed runs. The final
+results show the true total cost of the optimization, not just the last session.
+
+**Overfitting protection.** An optional validation split monitors generalization
+throughout training. The best prompt is selected against the val set — so the
+final test eval reflects real-world performance rather than a prompt tuned to
+the specific examples it was optimized on.
+
 ## What it does
 
 Given a dataset and a starting prompt, aevyra-reflex:
 
-1. Sets a target score — from a verdict benchmark, a live model comparison, or an explicit threshold
-2. Runs a baseline eval with verdict to measure the starting score
-3. Analyzes failure patterns and rewrites the prompt to fix them
-4. Re-evaluates after each rewrite, iterating until the score meets the target
-5. Returns a before/after comparison with the optimized prompt
+1. Runs a baseline eval on a held-out test set to measure the starting score
+2. Optimizes the prompt on the training set, iterating until the score meets the target
+3. Re-evaluates on the held-out test set so reported improvement is honest
+4. Returns the optimized prompt with a full before/after comparison, token costs, and significance test
 
 ## When to use it
 
@@ -78,6 +93,7 @@ Given a dataset and a starting prompt, aevyra-reflex:
 - A model scores poorly on your eval — you want a better prompt, not a bigger model
 - You're iterating on a system prompt and want to automate the feedback loop
 - You want to understand *why* a prompt works (the analysis teaches prompt engineering)
+- You're migrating a prompt from one model family to another (e.g. Claude → Llama)
 
 ## Optimization strategies
 
@@ -85,16 +101,16 @@ The **auto** strategy (default) picks the right technique for each phase.
 You can also run any strategy directly.
 
 <CardGroup cols={2}>
-  <Card title="Auto" icon="wand-magic-sparkles" href="/docs/strategies">
+  <Card title="Auto" icon="wand-magic-sparkles" href="/reflex/strategies">
     Multi-phase pipeline — structural → iterative → fewshot, chosen adaptively
   </Card>
-  <Card title="Iterative" icon="arrows-spin" href="/docs/strategies#iterative">
+  <Card title="Iterative" icon="arrows-spin" href="/reflex/strategies#iterative">
     Diagnose failures, revise wording, repeat. Label-free aware.
   </Card>
-  <Card title="Structural" icon="table-columns" href="/docs/strategies#structural">
+  <Card title="Structural" icon="table-columns" href="/reflex/strategies#structural">
     Reorganize formatting, sections, and hierarchy
   </Card>
-  <Card title="PDO" icon="trophy" href="/docs/strategies#pdo">
+  <Card title="PDO" icon="trophy" href="/reflex/strategies#pdo">
     Tournament-style search with dueling bandits and adaptive ranking
   </Card>
 </CardGroup>
@@ -104,7 +120,7 @@ You can also run any strategy directly.
 ```
                 ┌──────────────┐
                 │   Dataset    │
-                │  (JSONL)     │
+                │ (JSONL/CSV)  │
                 └──────┬───────┘
                        │
                        ▼
@@ -131,16 +147,16 @@ You can also run any strategy directly.
 ```
 
 <CardGroup cols={2}>
-  <Card title="CLI reference" icon="terminal" href="/docs/cli">
+  <Card title="CLI reference" icon="terminal" href="/reflex/cli">
     All commands and flags
   </Card>
-  <Card title="Strategies" icon="chess" href="/docs/strategies">
+  <Card title="Strategies" icon="chess" href="/reflex/strategies">
     How each optimization axis works
   </Card>
-  <Card title="Configuration" icon="gear" href="/docs/configuration">
+  <Card title="Configuration" icon="gear" href="/reflex/configuration">
     Tuning iterations, thresholds, and parallelism
   </Card>
-  <Card title="Providers" icon="server" href="/docs/providers">
+  <Card title="Providers" icon="server" href="/reflex/providers">
     OpenAI, Anthropic, Gemini, Ollama, and more
   </Card>
 </CardGroup>

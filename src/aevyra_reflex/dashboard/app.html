@@ -298,6 +298,7 @@ const el = (tag, attrs, ...children) => {
     else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
     else if (k === 'html') e.innerHTML = v;
+    else if (k === 'disabled') { if (v) e.setAttribute('disabled', ''); else e.removeAttribute('disabled'); }
     else e.setAttribute(k, v);
   });
   children.flat(Infinity).forEach(c => {
@@ -453,14 +454,19 @@ function computeDiff(oldText, newText) {
 }
 
 // ── Runs List Page ───────────────────────────────────────────
-async function renderRunsList() {
+const PAGE_SIZE = 50;
+let _runsPage = 0;
+
+async function renderRunsList(silent = false) {
   const app = $('#app');
-  app.innerHTML = '<div class="loading"><span class="pulse">Loading runs...</span></div>';
+  if (!silent) app.innerHTML = '<div class="loading"><span class="pulse">Loading runs...</span></div>';
 
   let runs;
   try { runs = await api('/api/runs'); } catch (e) {
-    app.innerHTML = '';
-    app.appendChild(el('div', { class: 'empty-state' }, el('h2', null, 'Error loading runs'), el('p', null, e.message)));
+    if (!silent) {
+      app.innerHTML = '';
+      app.appendChild(el('div', { class: 'empty-state' }, el('h2', null, 'Error loading runs'), el('p', null, e.message)));
+    }
     return;
   }
 
@@ -476,18 +482,6 @@ async function renderRunsList() {
     return;
   }
 
-  const header = el('div', { class: 'card-header' },
-    el('span', { class: 'card-title' }, 'Optimization Runs'),
-    el('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
-      el('span', { class: 'muted', style: { fontSize: '13px' } }, runs.length + ' run' + (runs.length !== 1 ? 's' : '')),
-      el('button', { class: 'new-run-btn', onClick: () => { location.hash = '/new'; } }, '+ New Run')
-    )
-  );
-
-  const thead = el('thead', null,
-    el('tr', null, ...['ID','Created','Status','Strategy','Model','Iters','Baseline','Best','Target','Dataset','Reasoning'].map(h => el('th', null, h)))
-  );
-
   // Re-sort runs so each branch appears immediately after its parent
   const runsById = {};
   runs.forEach(r => { runsById[r.run_id] = r; });
@@ -498,16 +492,46 @@ async function renderRunsList() {
       childrenOf[r.parent_run_id].push(r);
     }
   });
-  const sortedRuns = [];
+  // Build sorted list (oldest → newest), then reverse so newest runs appear first.
+  const sortedAsc = [];
   runs.forEach(r => {
     if (!r.parent_run_id) {
-      sortedRuns.push(r);
-      (childrenOf[r.run_id] || []).forEach(child => sortedRuns.push(child));
+      sortedAsc.push(r);
+      (childrenOf[r.run_id] || []).forEach(child => sortedAsc.push(child));
     }
   });
+  const sortedRuns = sortedAsc.slice().reverse();
+
+  const totalPages = Math.max(1, Math.ceil(sortedRuns.length / PAGE_SIZE));
+  _runsPage = Math.max(0, Math.min(_runsPage, totalPages - 1));
+
+  const pageStart = _runsPage * PAGE_SIZE;
+  const pageRuns  = sortedRuns.slice(pageStart, pageStart + PAGE_SIZE);
+
+  const pageLabel = el('span', { class: 'muted', style: { fontSize: '13px' } },
+    runs.length + ' run' + (runs.length !== 1 ? 's' : '') +
+    (totalPages > 1 ? `  ·  page ${_runsPage + 1} of ${totalPages}` : '')
+  );
+  const prevBtn = el('button', { class: 'btn', style: { padding: '4px 10px', fontSize: '12px', opacity: _runsPage === 0 ? '0.3' : '1' }, disabled: _runsPage === 0 }, '← Prev');
+  const nextBtn = el('button', { class: 'btn', style: { padding: '4px 10px', fontSize: '12px', opacity: _runsPage >= totalPages - 1 ? '0.3' : '1' }, disabled: _runsPage >= totalPages - 1 }, 'Next →');
+  prevBtn.addEventListener('click', () => { _runsPage--; renderRunsList(); });
+  nextBtn.addEventListener('click', () => { _runsPage++; renderRunsList(); });
+
+  const header = el('div', { class: 'card-header' },
+    el('span', { class: 'card-title' }, 'Optimization Runs'),
+    el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+      pageLabel,
+      ...(totalPages > 1 ? [prevBtn, nextBtn] : []),
+      el('button', { class: 'new-run-btn', onClick: () => { location.hash = '/new'; } }, '+ New Run')
+    )
+  );
+
+  const thead = el('thead', null,
+    el('tr', null, ...['ID','Created','Status','Strategy','Model','Iters','Baseline','Best','Target','Dataset','Reasoning'].map(h => el('th', null, h)))
+  );
 
   const tbody = el('tbody');
-  sortedRuns.forEach(r => {
+  pageRuns.forEach(r => {
     const isChild = !!r.parent_run_id;
     const ds = r.dataset ? r.dataset.split('/').pop() : '--';
     const rm = (r.config && r.config.reasoning_model) || '--';
@@ -594,6 +618,20 @@ async function renderRunsList() {
   const table = el('table', { class: 'runs' }, thead, tbody);
   const card = el('div', { class: 'card' }, header, table);
   app.appendChild(card);
+
+  // Auto-refresh while any run is still running so the list stays live.
+  const hasRunning = runs.some(r => r.status === 'running');
+  if (hasRunning) {
+    const tid = setTimeout(() => {
+      // Only re-render if we're still on the list page.
+      if (!location.hash || location.hash === '#/' || location.hash === '#') {
+        renderRunsList(true);
+      }
+    }, 5000);
+    // Cancel the timer if the user navigates away before it fires.
+    const onHashChange = () => { clearTimeout(tid); window.removeEventListener('hashchange', onHashChange); };
+    window.addEventListener('hashchange', onHashChange);
+  }
 }
 
 // ── Flow Graph ───────────────────────────────────────────────
@@ -628,6 +666,8 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
   const threshold = optConfig && optConfig.score_threshold;
   const phases = groupPhases(iterations, strategy);
   const allIters = phases.flatMap(p => p.iters);
+  // Best train score — highest score achieved during training iterations
+  const bestTrainScore = allIters.length > 0 ? Math.max(...allIters.map(i => i.score)) : null;
 
   // ── Layout: single vertical chain ─────────────────────
   // Phases are sequential — each phase header sits between the previous
@@ -723,7 +763,7 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
       const gi = allIters.findIndex(x => x.iteration === it.iteration);
       const prevScore = gi === 0 ? baselineScore : allIters[gi - 1].score;
       const delta = prevScore != null ? it.score - prevScore : null;
-      const isBest = bestScore != null && Math.abs(it.score - bestScore) < 0.0001;
+      const isBest = bestTrainScore != null && Math.abs(it.score - bestTrainScore) < 0.0001;
       const dc = delta == null ? color : delta > 0.0005 ? '#00cc77' : delta < -0.0005 ? '#ff4455' : '#888';
 
       const isFullEval = !!it.is_full_eval;
@@ -786,7 +826,7 @@ function buildFlowGraph(iterations, baselineScore, bestScore, optConfig, onSelec
         const imp = bestScore - baselineScore;
         if (imp > 0.0001) hint = '+' + imp.toFixed(4) + ' (' + (imp / baselineScore * 100).toFixed(1) + '%)';
       }
-      wrap.appendChild(place(termNode('Best', bestScore, '#00cc77', hint), tx, item.y, TW));
+      wrap.appendChild(place(termNode('Test Score', bestScore, '#00cc77', hint), tx, item.y, TW));
     }
   });
 
@@ -834,7 +874,9 @@ async function renderRunDetail(runId) {
   const improvement = (baselineScore != null && bestScore != null) ? bestScore - baselineScore : null;
   const improvPct = (improvement != null && baselineScore > 0) ? (improvement / baselineScore * 100) : null;
 
-  const status = run.is_complete ? 'completed' : (checkpoint ? 'interrupted' : 'running');
+  // Prefer the server-computed status (handles stale sentinels, etc.).
+  // Fall back to client-side derivation for older server versions.
+  const status = run.status || (run.is_complete ? 'completed' : (run.is_running ? 'running' : (checkpoint ? 'interrupted' : 'running')));
 
   // Back button
   app.appendChild(el('button', { class: 'back-btn', onClick: () => { location.hash = '/'; } }, '\u2190 All runs'));
@@ -864,10 +906,16 @@ async function renderRunDetail(runId) {
   };
 
   statsRow.appendChild(mkStat('Baseline', fmtScore(baselineScore)));
-  statsRow.appendChild(mkStat('Best Score', fmtScore(bestScore), 'green',
+  // Best train score — highest score seen during training iterations
+  const bestIterScore = iterations.length > 0 ? Math.max(...iterations.map(i => i.score)) : null;
+  if (bestIterScore != null) {
+    statsRow.appendChild(mkStat('Best Train', fmtScore(bestIterScore), 'accent'));
+  }
+  // Test score — held-out test set evaluation of best prompt
+  statsRow.appendChild(mkStat('Test Score', fmtScore(bestScore), 'green',
     improvement > 0 ? el('div', { class: 'improvement' }, '+' + improvement.toFixed(4) + ' (' + (improvPct||0).toFixed(1) + '%)') : null
   ));
-  // Only show Final if it differs from Best (verification eval divergence)
+  // Only show Final if it differs from Test (verification eval divergence)
   if (finalScore != null && bestScore != null && Math.abs(finalScore - bestScore) > 0.0001) {
     statsRow.appendChild(mkStat('Verified', fmtScore(finalScore)));
   }
@@ -961,7 +1009,11 @@ async function renderRunDetail(runId) {
   // Score trajectory (shown when there are iterations)
   if (iterations.length > 0) {
     const trainScores = iterations.map(it => it.score);
-    const valTraj = result && result.val_trajectory && result.val_trajectory.length ? result.val_trajectory : null;
+    // Use result.val_trajectory if available (completed run), otherwise derive from per-iteration val_scores
+    const iterValScores = iterations.map(it => it.val_score).filter(v => v != null);
+    const valTraj = (result && result.val_trajectory && result.val_trajectory.length)
+      ? result.val_trajectory
+      : (iterValScores.length > 0 ? iterValScores : null);
 
     // Build compact sparkline: dual series SVG
     const spW = 560, spH = 80;
@@ -1583,14 +1635,14 @@ function renderNewRun() {
   });
 
   // Train/val/test split
-  const trainRatioInput = el('input', { class: 'form-input', type: 'number', value: '0.8', min: '0.1', max: '1.0', step: '0.05' });
-  const valRatioInput   = el('input', { class: 'form-input', type: 'number', value: '0',   min: '0',   max: '0.5', step: '0.05' });
+  const trainRatioInput = el('input', { class: 'form-input', type: 'number', value: '0.65', min: '0.1', max: '1.0', step: '0.05' });
+  const valRatioInput   = el('input', { class: 'form-input', type: 'number', value: '0.20', min: '0',   max: '0.5', step: '0.05' });
   const earlyStopInput  = el('input', { class: 'form-input', type: 'number', value: '0',   min: '0',   max: '20',  step: '1' });
   advBody.appendChild(el('div', { class: 'form-row' },
     el('div', { class: 'form-group', style: { marginBottom: '0' } },
       el('label', { class: 'form-label' }, 'Train Split'),
       trainRatioInput,
-      el('div', { class: 'form-hint' }, 'Fraction used for optimization (0.8 = 80% train / 20% test).')
+      el('div', { class: 'form-hint' }, 'Fraction used for optimization (0.65 = 65% train+val / 35% test).')
     ),
     el('div', { class: 'form-group', style: { marginBottom: '0' } },
       el('label', { class: 'form-label' }, 'Val Split'),
@@ -1684,8 +1736,8 @@ function renderNewRun() {
         source_model: ($('#source-model-input') || {}).value || '',
         max_tokens: parseInt(maxTokensInput.value, 10) || 1024,
         max_workers: parseInt(maxWorkersInput.value, 10) || 4,
-        train_ratio: parseFloat(trainRatioInput.value) || 0.8,
-        val_ratio: parseFloat(valRatioInput.value) || 0.1,
+        train_ratio: parseFloat(trainRatioInput.value) || 0.65,
+        val_ratio: parseFloat(valRatioInput.value) || 0.20,
         early_stopping_patience: parseInt(earlyStopInput.value, 10) || 3,
         batch_size: parseInt(batchSizeInput.value, 10) || 0,
         full_eval_steps: parseInt(fullEvalStepInput.value, 10) || 0,
@@ -1750,10 +1802,12 @@ function renderLiveRun(jobId) {
   const scoreBig = el('div', { class: 'live-score-big' }, '--');
   const scoreLabel = el('div', { class: 'live-score-label' }, 'Latest score');
   const baselineEl = el('div', { style: { marginTop: '16px', fontSize: '12px', color: 'var(--text-2)' } }, 'Baseline: —');
+  const reasonTokEl = el('div', { style: { marginTop: '6px', fontSize: '12px', color: 'var(--text-2)', fontFamily: 'var(--mono)' } });
+  let totalReasonTok = 0;
   const iterTrack = el('div', { class: 'live-iter-track' });
   const rightPanel = el('div', { class: 'card' },
     el('div', { class: 'section-title' }, 'Score'),
-    scoreBig, scoreLabel, baselineEl,
+    scoreBig, scoreLabel, baselineEl, reasonTokEl,
     el('div', { style: { marginTop: '20px' } },
       el('div', { class: 'section-title' }, 'Iterations'),
       iterTrack
@@ -1812,6 +1866,11 @@ function renderLiveRun(jobId) {
       scores.push(score);
 
       scoreBig.textContent = score.toFixed(4);
+      const iterRTok = ev.reasoning_tokens || 0;
+      if (iterRTok) {
+        totalReasonTok += iterRTok;
+        reasonTokEl.textContent = `Reasoning tokens: ${fmtTok(totalReasonTok)}`;
+      }
       addLog(`iter ${String(iter).padStart(2, ' ')}  score: ${score.toFixed(4)}`, 'score');
 
       // Iter bar row
@@ -1847,7 +1906,7 @@ function renderLiveRun(jobId) {
       statusBadge.textContent = '✓ completed';
       cancelBtn.style.display = 'none';
       const imp = ev.improvement_pct != null ? ' (' + (ev.improvement_pct >= 0 ? '+' : '') + ev.improvement_pct.toFixed(1) + '%)' : '';
-      addLog(`Done — best score: ${ev.best_score != null ? ev.best_score.toFixed(4) : '--'}${imp}`, 'done');
+      addLog(`Done — test score: ${ev.best_score != null ? ev.best_score.toFixed(4) : '--'}${imp}`, 'done');
       if (ev.best_prompt) {
         promptBox.textContent = ev.best_prompt;
         promptBox.style.display = 'block';
@@ -1899,9 +1958,9 @@ function render() {
   const navRuns = $('#nav-runs');
   if (navRuns) navRuns.className = route.page === 'list' ? 'active' : '';
 
-  if (route.page === 'run') renderRunDetail(route.id);
-  else if (route.page === 'new') renderNewRun();
-  else if (route.page === 'job') renderLiveRun(route.id);
+  if (route.page === 'run') { _runsPage = 0; renderRunDetail(route.id); }
+  else if (route.page === 'new') { _runsPage = 0; renderNewRun(); }
+  else if (route.page === 'job') { _runsPage = 0; renderLiveRun(route.id); }
   else renderRunsList();
 }
 

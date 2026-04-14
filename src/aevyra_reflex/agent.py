@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,31 @@ class _AnthropicBackend:
         return self._client
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        from anthropic import RateLimitError
+        try:
+            from anthropic import OverloadedError
+        except ImportError:
+            OverloadedError = RateLimitError  # older anthropic versions don't export this
+
+        delays = [5, 10, 20, 40, 60]
+        for attempt, delay in enumerate(delays + [None]):
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                break
+            except (OverloadedError, RateLimitError) as exc:
+                if delay is None:
+                    raise
+                logger.warning(
+                    "Reasoning model %s (attempt %d/%d): %s — retrying in %ds",
+                    self.model, attempt + 1, len(delays), exc.__class__.__name__, delay,
+                )
+                time.sleep(delay)
+
         if hasattr(response, "usage") and response.usage:
             self.tokens_used = getattr(self, "tokens_used", 0) + (
                 response.usage.input_tokens + response.usage.output_tokens
@@ -113,12 +133,27 @@ class _OpenAIBackend:
         return self._client
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        from openai import APIStatusError
+
+        delays = [5, 10, 20, 40, 60]
+        for attempt, delay in enumerate(delays + [None]):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    temperature=temperature,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                break
+            except APIStatusError as exc:
+                if exc.status_code not in (429, 529) or delay is None:
+                    raise
+                logger.warning(
+                    "Reasoning model %s (attempt %d/%d): HTTP %d — retrying in %ds",
+                    self.model, attempt + 1, len(delays), exc.status_code, delay,
+                )
+                time.sleep(delay)
+
         if response.usage:
             self.tokens_used = getattr(self, "tokens_used", 0) + (
                 response.usage.prompt_tokens + response.usage.completion_tokens
@@ -175,6 +210,28 @@ class _OllamaBackend:
 # Backend resolution
 # ---------------------------------------------------------------------------
 
+# Provider prefixes that can appear in model names (e.g. "openrouter/qwen/qwen3-8b").
+# Maps prefix → (base_url, env_key).  Checked before model-name heuristics.
+_MODEL_PREFIX_PROVIDERS: dict[str, dict[str, str]] = {
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "env_key": "OPENROUTER_API_KEY",
+    },
+    "together": {
+        "base_url": "https://api.together.xyz/v1",
+        "env_key": "TOGETHER_API_KEY",
+    },
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "env_key": "GROQ_API_KEY",
+    },
+    "deepinfra": {
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "env_key": "DEEPINFRA_API_KEY",
+    },
+}
+
+
 def _resolve_agent_backend(
     model: str,
     max_tokens: int = 4096,
@@ -187,12 +244,13 @@ def _resolve_agent_backend(
     Resolution order:
         1. Explicit provider kwarg: "anthropic", "openai", "ollama", or any
            alias in PROVIDER_ALIASES (e.g. "gemini", "openrouter", "groq")
-        2. Model name heuristics:
+        2. Model name prefix: "openrouter/model", "groq/model", etc.
+        3. Model name heuristics:
            - "claude-*"         → Anthropic
            - "gemini-*"         → OpenAI-compat against Google's v1beta endpoint
            - "ollama/*" or no / → Ollama  (if base_url looks local or default)
            - everything else    → OpenAI-compatible
-        3. base_url heuristics:
+        4. base_url heuristics:
            - contains "localhost" or "127.0.0.1" + port 11434 → Ollama
            - any other base_url                                → OpenAI-compatible
     """
@@ -207,14 +265,44 @@ def _resolve_agent_backend(
         if p == "ollama":
             url = base_url or "http://localhost:11434"
             return _OllamaBackend(model, max_tokens, base_url=url)
-        # Check if it's a known alias
+        # Check agent-level prefix table (openrouter, groq, together, deepinfra)
+        if p in _MODEL_PREFIX_PROVIDERS:
+            info = _MODEL_PREFIX_PROVIDERS[p]
+            resolved_url = base_url or info["base_url"]
+            resolved_key = api_key or os.environ.get(info["env_key"])
+            if not resolved_key:
+                raise ValueError(
+                    f"No API key found for '{p}'. "
+                    f"Set the {info['env_key']} environment variable or pass --reasoning-api-key."
+                )
+            return _OpenAIBackend(model, max_tokens, api_key=resolved_key, base_url=resolved_url)
+        # Check optimizer-level aliases (gemini, together, etc.)
         if p in PROVIDER_ALIASES:
             alias = PROVIDER_ALIASES[p]
             resolved_url = base_url or alias["base_url"]
-            resolved_key = api_key or os.environ.get(alias["env_key"]) or os.environ.get("OPENAI_API_KEY")
+            resolved_key = api_key or os.environ.get(alias["env_key"])
+            if not resolved_key:
+                raise ValueError(
+                    f"No API key found for '{p}'. "
+                    f"Set the {alias['env_key']} environment variable or pass --reasoning-api-key."
+                )
             return _OpenAIBackend(model, max_tokens, api_key=resolved_key, base_url=resolved_url)
         # Generic openai-compatible
         return _OpenAIBackend(model, max_tokens, api_key=api_key, base_url=base_url)
+
+    # Model-name prefix: "openrouter/qwen/qwen3-8b", "groq/llama3-8b", etc.
+    first_segment = model.split("/")[0].lower()
+    if first_segment in _MODEL_PREFIX_PROVIDERS and not base_url:
+        info = _MODEL_PREFIX_PROVIDERS[first_segment]
+        # Strip the provider prefix — the rest is the actual model name on that provider
+        actual_model = model[len(first_segment) + 1:]
+        resolved_key = api_key or os.environ.get(info["env_key"])
+        if not resolved_key:
+            raise ValueError(
+                f"No API key found for '{first_segment}'. "
+                f"Set the {info['env_key']} environment variable or pass --reasoning-api-key."
+            )
+        return _OpenAIBackend(actual_model, max_tokens, api_key=resolved_key, base_url=info["base_url"])
 
     # Heuristics from model name
     if model.startswith("claude"):
