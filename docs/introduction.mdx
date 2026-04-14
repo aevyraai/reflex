@@ -12,7 +12,7 @@ full reasoning trace are persisted as a durable audit trail.
 
 ```bash
 pip install aevyra-reflex
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -o best_prompt.md
 ```
 
 Works with any model — local Ollama or vLLM, OpenAI, Anthropic, Gemini, or
@@ -60,7 +60,7 @@ hardware so nothing leaves your machine:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model ollama/qwen3:8b
 ```
 

@@ -63,7 +63,7 @@ def register_strategy(name: str, cls: type[Strategy]) -> None:
         config = OptimizerConfig(strategy="montecarlo")
 
         # CLI
-        aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 -s montecarlo
+        aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b-s montecarlo
 
     Args:
         name: Short name for the strategy (used in CLI ``-s`` flag).

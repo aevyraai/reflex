@@ -19,12 +19,12 @@ There are three ways to set the target, in priority order:
     ```bash
     # Step 1: benchmark with verdict
     aevyra-verdict run data.jsonl \
-      -m openai/gpt-4o-mini -m local/llama3.1 \
+      -m openai/gpt-4o-mini -m local/llama3.1:8b\
       -o results.json
 
     # Step 2: optimize — target is automatically gpt-4o-mini's score
     aevyra-reflex optimize data.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --verdict-results results.json \
       -o best_prompt.md
     ```
@@ -40,7 +40,7 @@ There are three ways to set the target, in priority order:
 
     ```bash
     aevyra-reflex optimize data.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --target openai/gpt-4o-mini \
       --target openai/gpt-4o \
       -o best_prompt.md
@@ -61,7 +61,7 @@ There are three ways to set the target, in priority order:
 
     ```bash
     aevyra-reflex optimize data.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --threshold 0.90
     ```
 
@@ -135,10 +135,10 @@ an outsized effect on the mean score.
 aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1
 
 # Larger test set (70/30)
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 0.7
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --train-split 0.7
 
 # No split — all examples used for both optimization and eval
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --train-split 1.0
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --train-split 1.0
 ```
 
 The split is deterministic (seeded at 42) so the same dataset always
@@ -168,11 +168,11 @@ you compute and returns the least-overfit prompt.
 aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1
 
 # Disable val split
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --val-split 0.0
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --val-split 0.0
 
 # Custom patience
 aevyra-reflex optimize data.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --train-split 0.8 \
   --val-split 0.1 \
   --early-stopping-patience 5
@@ -224,10 +224,10 @@ Mini-batch mode samples a random subset each round:
 
 ```bash
 # 32 examples per iteration
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --batch-size 32
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --batch-size 32
 
 # Combine with train/test split
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b\
   --train-split 0.8 --batch-size 40
 ```
 
@@ -255,7 +255,7 @@ training set for an accurate checkpoint:
 
 ```bash
 # Batch of 32 per iter; full eval every 5 iterations
-aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \
+aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b\
   --batch-size 32 --full-eval-steps 5
 ```
 
@@ -298,7 +298,7 @@ average multiple passes before computing the test:
 ```bash
 # Average 3 eval passes for baseline and final, then test significance
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --eval-runs 3
 ```
 
@@ -475,7 +475,7 @@ A more capable reasoning model produces better prompt rewrites.
   <Tab title="OpenAI">
     ```bash
     aevyra-reflex optimize dataset.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --reasoning-model openai/gpt-4o
     ```
 
@@ -490,7 +490,7 @@ A more capable reasoning model produces better prompt rewrites.
   <Tab title="Gemini">
     ```bash
     aevyra-reflex optimize dataset.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --reasoning-model gemini/gemini-2.0-flash
     ```
 
@@ -509,7 +509,7 @@ A more capable reasoning model produces better prompt rewrites.
   <Tab title="OpenRouter / Together / etc.">
     ```bash
     aevyra-reflex optimize dataset.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --reasoning-model openrouter/meta-llama/llama-3.1-70b-instruct
     ```
 
@@ -521,7 +521,7 @@ A more capable reasoning model produces better prompt rewrites.
   <Tab title="Self-hosted endpoint">
     ```bash
     aevyra-reflex optimize dataset.jsonl prompt.md \
-      -m local/llama3.1 \
+      -m local/llama3.1:8b\
       --reasoning-model openai/my-model \
       --reasoning-base-url http://localhost:8000/v1 \
       --reasoning-api-key dummy
@@ -576,12 +576,12 @@ to pick up where it left off:
 ```bash
 # Resume the latest interrupted run matching this dataset
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --resume
 
 # Resume a specific run by ID
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --resume-from 003
 ```
 
@@ -606,7 +606,7 @@ directory. Use `--run-dir` to change this:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --run-dir ./experiments/.reflex
 ```
 

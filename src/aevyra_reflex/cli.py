@@ -244,17 +244,17 @@ def optimize(
     \b
     Examples:
       # Optimize llama to match gpt-4o-mini's score (live benchmark)
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --target openai/gpt-4o-mini
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --target openai/gpt-4o-mini
 
       # Use existing verdict results as the target
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --verdict-results results.json
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --verdict-results results.json
 
       # Multiple targets — best score wins
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \\
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b\\
         --target openai/gpt-4o-mini --target openai/gpt-4o
 
       # Explicit threshold (ignores --target and --verdict-results)
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --threshold 0.90
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --threshold 0.90
     """
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,

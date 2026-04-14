@@ -29,7 +29,7 @@ reasoning model too so nothing leaves your machine:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model ollama/qwen3:8b
 ```
 
@@ -140,7 +140,7 @@ you already ran `aevyra-verdict`, pass the results file:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --verdict-results results.json \
   -o best_prompt.md
 ```
@@ -149,7 +149,7 @@ Or let reflex benchmark for you in one command:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --target openai/gpt-4o-mini \
   -o best_prompt.md
 ```

@@ -12,7 +12,7 @@ improving an existing prompt, migrating one to a new model, or closing the gap t
 model's score.
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -o best_prompt.md
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -o best_prompt.md
 ```
 
 Works with any model — local Ollama or vLLM, OpenAI, Anthropic, Gemini, or
@@ -57,7 +57,7 @@ hardware if you want:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model ollama/qwen3:8b \
   -o best_prompt.md
 ```
@@ -207,7 +207,7 @@ aevyra-verdict run dataset.jsonl --config models.yaml -o results.json
 Then use that score as the target for reflex to close the gap on a smaller or faster model:
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --target 0.87
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --target 0.87
 ```
 
 Reflex will optimize the prompt to match what your best model achieved — without switching
@@ -330,8 +330,8 @@ aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b \
 Every run is checkpointed to `.reflex/`. Resume from any interruption:
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --resume
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --resume-from 003
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --resume
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --resume-from 003
 aevyra-reflex runs
 ```
 
@@ -342,15 +342,15 @@ training examples; the val set tracks overfitting per-iteration; the test set
 is used exclusively for baseline and final scores.
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1                   # 70/10/20 split (default)
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --val-split 0.0   # 80/20, no val
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --train-split 1.0 # no split
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b                  # 70/10/20 split (default)
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --val-split 0.0   # 80/20, no val
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --train-split 1.0 # no split
 ```
 
 ## Mini-batch mode for large datasets
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --batch-size 32
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --batch-size 32
 ```
 
 Each iteration samples `--batch-size` examples at random. Baseline and final
@@ -363,7 +363,7 @@ for. The reasoning model adapts idioms automatically:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl claude_prompt.md \
-  -m local/llama3.1 --source-model claude-sonnet -o llama_prompt.md
+  -m local/llama3.1:8b --source-model claude-sonnet -o llama_prompt.md
 
 aevyra-reflex optimize dataset.jsonl gpt4o_prompt.md \
   -m local/qwen3:8b --source-model gpt-4o -o qwen3_prompt.md
@@ -374,13 +374,13 @@ aevyra-reflex optimize dataset.jsonl gpt4o_prompt.md \
 Val split (10%) and early stopping (patience 3) are on by default. To disable:
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --val-split 0.0
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --val-split 0.0
 ```
 
 To tune:
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 \
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b\
   --train-split 0.8 --val-split 0.1 --early-stopping-patience 5
 ```
 
@@ -415,25 +415,25 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 
 # OpenAI
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 --reasoning-model openai/gpt-4o
+  -m local/llama3.1:8b --reasoning-model openai/gpt-4o
 
 # Gemini 2.0 Flash — fast and cost-effective (GOOGLE_API_KEY)
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 --reasoning-model gemini/gemini-2.0-flash
+  -m local/llama3.1:8b --reasoning-model gemini/gemini-2.0-flash
 
 # Gemini 2.5 Pro — strongest Gemini reasoning model
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 --reasoning-model gemini/gemini-2.5-pro
+  -m local/llama3.1:8b --reasoning-model gemini/gemini-2.5-pro
 
 # vLLM — self-hosted reasoning model
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model openai/qwen3-8b \
   --reasoning-base-url http://localhost:8000/v1
 
 # Any other OpenAI-compatible endpoint (TGI, LM Studio, etc.)
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model openai/my-model \
   --reasoning-base-url http://localhost:8000/v1
 ```
@@ -445,7 +445,7 @@ creative writing. Use an LLM judge instead of ROUGE/BLEU:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 --judge openai/gpt-4o -o best_prompt.md
+  -m local/llama3.1:8b --judge openai/gpt-4o -o best_prompt.md
 ```
 
 Pass a custom criteria file to tell the judge exactly what to look for:
@@ -483,10 +483,10 @@ automatically for label-free datasets.
 ## CLI reference
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --max-iterations 20
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --max-iterations 20
 aevyra-reflex optimize dataset.jsonl prompt.md -m openai/gpt-5.4-nano -s iterative --metric rouge
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s pdo --max-iterations 50
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 --judge openai/gpt-4o
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -s pdo --max-iterations 50
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b --judge openai/gpt-4o
 aevyra-reflex optimize dataset.jsonl prompt.md -m anthropic/claude-haiku-4-5-20251001 --judge anthropic/claude-sonnet-4-6 --judge-criteria rubric.md
 aevyra-reflex dashboard
 aevyra-reflex runs
