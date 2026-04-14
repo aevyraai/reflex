@@ -66,7 +66,11 @@ class _AnthropicBackend:
         return self._client
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
-        from anthropic import OverloadedError, RateLimitError
+        from anthropic import RateLimitError
+        try:
+            from anthropic import OverloadedError
+        except ImportError:
+            OverloadedError = RateLimitError  # older anthropic versions don't export this
 
         delays = [5, 10, 20, 40, 60]
         for attempt, delay in enumerate(delays + [None]):

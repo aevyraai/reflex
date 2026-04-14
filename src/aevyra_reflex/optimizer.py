@@ -117,6 +117,10 @@ def parse_verdict_results(
 # OpenRouterProvider that reads OPENROUTER_API_KEY directly. Aliasing it to
 # the openai provider caused confusing "OPENAI_API_KEY not set" errors.
 PROVIDER_ALIASES: dict[str, dict[str, str]] = {
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "env_key": "OPENROUTER_API_KEY",
+    },
     "together": {
         "base_url": "https://api.together.xyz/v1",
         "env_key": "TOGETHER_API_KEY",
@@ -246,25 +250,25 @@ class OptimizerConfig:
     samples_per_duel, initial_pool_size, thompson_alpha, mutation_frequency,
     num_top_to_mutate, max_pool_size."""
 
-    train_ratio: float = 0.65
+    train_ratio: float = 0.8
     """Fraction of the dataset used during optimization. The remaining examples
     are held out as a test set and used exclusively for baseline and final eval.
     Set to 1.0 to use the full dataset for everything (no split).
-    Default: 0.65 (65% train+val / 35% test).
+    Default: 0.8 (80% train+val / 20% test).
 
     A larger test set is preferred over a larger training set because the test
     set determines statistical significance: ~30 held-out samples are needed for
     a paired test to reliably detect moderate improvements (p < 0.05). The
     optimizer needs far fewer training examples to identify failure patterns."""
 
-    val_ratio: float = 0.20
+    val_ratio: float = 0.1
     """Fraction of the total dataset reserved as a validation set, carved out of
     the training portion. Used to detect overfitting mid-run: if the val score
     plateaus while train scores keep climbing, the prompt is fitting the training
     examples specifically. Set to 0.0 to disable validation splitting.
 
-    With train_ratio=0.65 and val_ratio=0.20 (the defaults), the actual split is:
-      45% train  /  20% val  /  35% test
+    With train_ratio=0.8 and val_ratio=0.1 (the defaults), the actual split is:
+      70% train  /  10% val  /  20% test
 
     Requires train_ratio - val_ratio >= 0.1 (at least 10% left for training)."""
 
