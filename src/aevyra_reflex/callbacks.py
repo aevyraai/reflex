@@ -184,6 +184,25 @@ class MLflowCallback:
         mlflow.log_params(params)
         logger.info(f"MLflow run started: {self._mlflow_run.info.run_id}")
 
+    def on_baseline(self, snapshot: Any) -> None:
+        try:
+            import mlflow
+        except ImportError:
+            return
+        mlflow.log_metric("score_test", snapshot.mean_score, step=0)
+        for metric_name, metric_score in (snapshot.scores_by_metric or {}).items():
+            mlflow.log_metric(f"score_test_{metric_name}", metric_score, step=0)
+
+    def on_final(self, snapshot: Any) -> None:
+        try:
+            import mlflow
+        except ImportError:
+            return
+        # Use step = total_iterations + 1 so it plots after the training curve
+        step = len(self._iteration_rows) + 1
+        mlflow.log_metric("score_test", snapshot.mean_score, step=step)
+        for metric_name, metric_score in (snapshot.scores_by_metric or {}).items():
+            mlflow.log_metric(f"score_test_{metric_name}", metric_score, step=step)
 
     def on_iteration(self, record: Any) -> None:
         try:
@@ -193,7 +212,9 @@ class MLflowCallback:
 
         step = record.iteration
 
-        mlflow.log_metric("score", record.score, step=step)
+        mlflow.log_metric("score_train", record.score, step=step)
+        if getattr(record, "val_score", None) is not None:
+            mlflow.log_metric("score_val", record.val_score, step=step)
 
         for metric_name, metric_score in (record.scores_by_metric or {}).items():
             mlflow.log_metric(f"score_{metric_name}", metric_score, step=step)
@@ -218,13 +239,16 @@ class MLflowCallback:
 
         # Accumulate iteration rows and log as a browsable table in Artifacts → iterations.json
         reasoning = getattr(record, "reasoning", "") or ""
-        self._iteration_rows.append({
+        row: dict[str, Any] = {
             "iteration":        step,
-            "score":            round(record.score, 4),
+            "score_train":      round(record.score, 4),
             **{f"score_{k}": round(v, 4) for k, v in (record.scores_by_metric or {}).items()},
             "prompt":           record.system_prompt,
             "reasoning":        reasoning,
-        })
+        }
+        if getattr(record, "val_score", None) is not None:
+            row["score_val"] = round(record.val_score, 4)
+        self._iteration_rows.append(row)
         try:
             # log_table expects dict-of-lists, not list-of-dicts
             keys = list(self._iteration_rows[0].keys())
@@ -239,11 +263,14 @@ class MLflowCallback:
         except ImportError:
             return
 
-        # Summary metrics
-        mlflow.log_metric("best_score", result.best_score)
+        # Summary metrics — labelled by split so train vs test are clearly distinct
+        mlflow.log_metric("best_score_train", result.best_score)
 
         if result.baseline:
             mlflow.log_metric("baseline_score", result.baseline.mean_score)
+
+        if result.final:
+            mlflow.log_metric("final_score_test", result.final.mean_score)
 
         if result.improvement is not None:
             mlflow.log_metric("improvement", result.improvement)
@@ -354,17 +381,42 @@ class WandbCallback:
 
         logger.info(f"W&B run started: {self._run.url if self._run else 'offline'}")
 
+    def on_baseline(self, snapshot: Any) -> None:
+        try:
+            import wandb
+        except ImportError:
+            return
+        metrics: dict[str, Any] = {"score_test": snapshot.mean_score}
+        for metric_name, metric_score in (snapshot.scores_by_metric or {}).items():
+            metrics[f"score_test_{metric_name}"] = metric_score
+        wandb.log(metrics)
+
+    def on_final(self, snapshot: Any) -> None:
+        try:
+            import wandb
+        except ImportError:
+            return
+        metrics: dict[str, Any] = {"score_test": snapshot.mean_score}
+        for metric_name, metric_score in (snapshot.scores_by_metric or {}).items():
+            metrics[f"score_test_{metric_name}"] = metric_score
+        wandb.log(metrics)
+
     def on_iteration(self, record: Any) -> None:
         try:
             import wandb
         except ImportError:
             return
 
-        metrics: dict[str, Any] = {"score": record.score, "iteration": record.iteration}
+        metrics: dict[str, Any] = {
+            "score_train": record.score,
+            "iteration":   record.iteration,
+        }
+        if getattr(record, "val_score", None) is not None:
+            metrics["score_val"] = record.val_score
         for metric_name, metric_score in (record.scores_by_metric or {}).items():
             metrics[f"score_{metric_name}"] = metric_score
 
-        wandb.log(metrics, step=record.iteration)
+        wandb.log(metrics)
 
         if self.log_prompt_each_iter and self._prompt_table is not None:
             self._prompt_table.add_data(record.iteration, record.system_prompt)
@@ -375,41 +427,52 @@ class WandbCallback:
         except ImportError:
             return
 
-        # Summary metrics (appear in the run overview, not the charts)
-        summary: dict[str, Any] = {
-            "best_score":       result.best_score,
-            "total_iterations": len(result.iterations),
-            "converged":        result.converged,
-        }
-        if result.baseline:
-            summary["baseline_score"] = result.baseline.mean_score
-        if result.improvement is not None:
-            summary["improvement"] = result.improvement
-        if result.improvement_pct is not None:
-            summary["improvement_pct"] = result.improvement_pct
+        try:
+            # Summary metrics — log via run.log() so they appear in Charts
+            # and W&B auto-populates the Overview summary from the last logged value.
+            summary: dict[str, Any] = {
+                "best_score_train": result.best_score,
+                "total_iterations": len(result.iterations),
+                "converged":        float(result.converged),
+            }
+            if result.baseline:
+                summary["baseline_score"] = result.baseline.mean_score
+            if result.final:
+                summary["final_score_test"] = result.final.mean_score
+            if result.improvement is not None:
+                summary["improvement"] = result.improvement
+            if result.improvement_pct is not None:
+                summary["improvement_pct"] = result.improvement_pct
 
-        if self._run:
-            self._run.summary.update(summary)
+            if self._run:
+                self._run.log(summary)
 
-        # Best prompt as artifact
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", prefix="best_prompt_", delete=False
-        ) as f:
-            f.write(result.best_prompt)
-            tmp_path = f.name
+            # Best prompt as artifact
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", prefix="best_prompt_", delete=False
+            ) as f:
+                f.write(result.best_prompt)
+                tmp_path = f.name
 
-        artifact = wandb.Artifact(name="best-prompt", type="prompt")
-        artifact.add_file(tmp_path, name="best_prompt.txt")
-        if self._run:
-            self._run.log_artifact(artifact)
-        os.unlink(tmp_path)
+            artifact = wandb.Artifact(name="best-prompt", type="prompt")
+            artifact.add_file(tmp_path, name="best_prompt.txt")
+            if self._run:
+                self._run.log_artifact(artifact)
+            os.unlink(tmp_path)
 
-        # Log prompt table if we collected one
-        if self._prompt_table is not None and self._run:
-            wandb.log({"prompts": self._prompt_table})
+            # Log prompt table if we collected one
+            if self._prompt_table is not None and self._run:
+                wandb.log({"prompts": self._prompt_table})
 
-        if self._run:
-            self._run.finish()
-            logger.info(f"W&B run complete (best score: {result.best_score:.4f})")
-            self._run = None
-            self._prompt_table = None
+        except Exception as e:
+            logger.warning(f"[W&B] on_run_end failed: {e}", exc_info=True)
+
+        finally:
+            if self._run:
+                self._run.finish()
+                logger.info(
+                    f"W&B run complete (best score: {result.best_score:.4f})"
+                    if hasattr(result, "best_score") else "W&B run finished"
+                )
+                self._run = None
+                self._prompt_table = None

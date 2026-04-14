@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-aevyra.mintlify.app-7B5CF8)](https://aevyra.mintlify.app/reflex/introduction)
 
 Agentic prompt optimization built for production workloads. Reflex takes your dataset and
 prompt, runs evals, diagnoses why scores are falling short, and rewrites the prompt — iterating
@@ -89,8 +90,9 @@ a prompt tuned to the specific examples it was optimized on.
 pip install aevyra-reflex
 ```
 
-Requires `aevyra-verdict`. By default, uses Claude for reasoning
-(`ANTHROPIC_API_KEY`). Swap in any model with `--reasoning-model`.
+Requires `aevyra-verdict`. Use `--reasoning-model` to pick any model for the
+reasoning step — OpenRouter, Ollama, OpenAI, Anthropic, or any
+OpenAI-compatible endpoint.
 
 ## Quick start
 
@@ -109,6 +111,7 @@ export OPENROUTER_API_KEY=sk-or-...
 aevyra-reflex optimize examples/security_incidents.jsonl \
   examples/security_incidents_prompt.md \
   -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --reasoning-model openrouter/qwen/qwen3-8b \
   --judge openrouter/qwen/qwen3-8b \
   --judge-criteria examples/security_incidents_judge.md \
   --max-workers 4 \
@@ -126,7 +129,7 @@ Output:
   Model(s)   : openrouter/meta-llama/llama-3.1-8b-instruct
   Strategy   : auto
   Metrics    : LLM judge
-  Reasoning  : claude-sonnet-4-20250514
+  Reasoning  : openrouter/qwen/qwen3-8b
   Target     : 0.8500
   Workers    : 4
 ====================================================
@@ -175,7 +178,7 @@ Or the Python API:
 
 ```python
 from aevyra_verdict import Dataset, LLMJudge
-from aevyra_verdict.providers import AnthropicProvider
+from aevyra_verdict.providers import OpenRouterProvider
 from aevyra_reflex import PromptOptimizer
 from pathlib import Path
 
@@ -184,7 +187,7 @@ result = (
     .set_dataset(Dataset.from_jsonl("examples/security_incidents.jsonl"))
     .add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
     .add_metric(LLMJudge(
-        judge_provider=AnthropicProvider(model="claude-sonnet-4-6"),
+        judge_provider=OpenRouterProvider(model="qwen/qwen3-8b"),
         criteria=Path("examples/security_incidents_judge.md").read_text(),
     ))
     .run(Path("examples/security_incidents_prompt.md").read_text())
@@ -501,14 +504,14 @@ accuracy/helpfulness/clarity/completeness rubric.
 
 ```python
 from aevyra_verdict import LLMJudge
-from aevyra_verdict.providers import AnthropicProvider
+from aevyra_verdict.providers import OpenRouterProvider
 
 result = (
     PromptOptimizer()
     .set_dataset(Dataset.from_jsonl("dataset.jsonl"))
-    .add_provider("anthropic", "claude-haiku-4-5-20251001")
+    .add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
     .add_metric(LLMJudge(
-        judge_provider=AnthropicProvider(model="claude-sonnet-4-6"),
+        judge_provider=OpenRouterProvider(model="qwen/qwen3-8b"),
         criteria=Path("criteria.md").read_text(),
     ))
     .run("You are a helpful assistant.")
@@ -580,6 +583,41 @@ config = OptimizerConfig(
     extra_kwargs={"variants_per_round": 4},
 )
 ```
+
+## Integrations
+
+Reflex has built-in callbacks for MLflow and Weights & Biases.
+
+### MLflow
+
+```bash
+pip install aevyra-reflex[mlflow]
+mlflow ui  # start the tracking server
+
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  --reasoning-model openrouter/qwen/qwen3-8b \
+  --mlflow \
+  --mlflow-experiment my-project
+```
+
+Each run logs params, a `score_train` / `score_val` / `score_test` trajectory, an interactive `iterations.json` table (prompt + reasoning per iteration), and the best prompt as an artifact.
+
+### Weights & Biases
+
+```bash
+pip install aevyra-reflex[wandb]
+
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  --reasoning-model openrouter/qwen/qwen3-8b \
+  --wandb \
+  --wandb-project my-project
+```
+
+Logs the same metrics to W&B Charts, with `score_train`, `score_val`, and `score_test` (baseline + final) as separate series and summary fields in the run Overview.
+
+See [docs/integrations.mdx](docs/integrations.mdx) for the Python API and custom callback interface.
+
+---
 
 ## Status
 

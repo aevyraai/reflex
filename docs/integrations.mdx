@@ -81,8 +81,11 @@ result = optimizer.run(prompt, callbacks=[cb])
 | When | What |
 |------|------|
 | Run start | Params: `strategy`, `reasoning_model`, `max_iterations`, `score_threshold`, `temperature`, `max_workers`, `target_model`, `target_source` |
-| Each iteration | Metrics: `score`, `score_<metric>` (e.g. `score_rouge`) at `step = iteration` |
-| Run end | Metrics: `best_score`, `baseline_score`, `improvement`, `improvement_pct`, `converged`, `total_iterations` |
+| Baseline eval | Metric: `score_test` at `step=0` — held-out test score before any optimization |
+| Each iteration | Metrics: `score_train`, `score_val` (when `--val-ratio` is set), `score_<metric>` (e.g. `score_rouge`) |
+| Each iteration | Artifact: `iterations.json` — table of iteration, score, prompt, reasoning (updated live) |
+| Final eval | Metric: `score_test` at `step=N+1` — held-out test score after optimization |
+| Run end | Metrics: `best_score_train`, `baseline_score`, `final_score_test`, `improvement`, `improvement_pct`, `converged`, `total_iterations` |
 | Run end | Artifact: `prompts/best_prompt_*.txt` — the winning prompt |
 
 ### Viewing results
@@ -92,9 +95,15 @@ mlflow ui
 # opens at http://localhost:5000
 ```
 
-You can compare runs, plot score trajectories, and download best prompts from
-the MLflow UI. Each reflex run appears as a separate MLflow run inside the
-configured experiment.
+Navigate to your results in three steps:
+
+1. **Experiments** (left sidebar) → click the experiment name (e.g. `security-incidents`)
+2. Click **Evaluation Runs** — the table lists every reflex run with its baseline and best score
+3. Click a run name to open it, then:
+   - **Overview** — run params (`strategy`, `reasoning_model`, etc.) and summary metrics (`best_score_train`, `baseline_score`, `final_score_test`, `improvement`)
+   - **Model metrics** — score trajectory chart, one point per iteration
+   - **Artifacts → iterations.json** — interactive table showing the prompt and reasoning used at each iteration alongside its score
+   - **Artifacts → prompts/** — `best_prompt_*.txt` with the final winning prompt
 
 ---
 
@@ -108,37 +117,62 @@ class MyCallback:
         """Called once before the baseline eval."""
         print(f"Starting {config.strategy} run")
 
+    def on_baseline(self, snapshot) -> None:
+        """Called once after the baseline (test-set) eval completes.
+
+        snapshot fields:
+            mean_score (float)      — baseline score on the held-out test set
+            scores_by_metric (dict) — per-metric breakdown
+            system_prompt (str)     — the initial prompt that was evaluated
+        """
+        print(f"Baseline: {snapshot.mean_score:.4f}")
+
     def on_iteration(self, record) -> None:
-        """Called after each iteration completes.
+        """Called after each iteration completes (after val eval if val-ratio is set).
 
         record fields:
             iteration (int)         — 1-based iteration number
-            score (float)           — mean score this iteration
+            score (float)           — mean train score this iteration
+            val_score (float|None)  — mean val score, or None if no val split
             scores_by_metric (dict) — per-metric breakdown
             system_prompt (str)     — prompt used this iteration
             reasoning (str)         — reasoning model's explanation
         """
-        print(f"  #{record.iteration}  {record.score:.4f}")
+        print(f"  #{record.iteration}  train={record.score:.4f}")
+
+    def on_final(self, snapshot) -> None:
+        """Called once after the final verification (test-set) eval completes.
+
+        snapshot fields:
+            mean_score (float)      — final score on the held-out test set
+            scores_by_metric (dict) — per-metric breakdown
+            system_prompt (str)     — the best prompt that was evaluated
+        """
+        print(f"Final test: {snapshot.mean_score:.4f}")
 
     def on_run_end(self, result) -> None:
-        """Called once after the final verification eval.
+        """Called once after on_final, with the full result object.
 
         result fields:
             best_prompt (str)         — the best system prompt found
-            best_score (float)        — score of the best prompt
-            baseline.mean_score       — score before optimization
-            improvement (float)       — best_score - baseline
+            best_score (float)        — best train score seen during optimization
+            baseline.mean_score       — test-set score before optimization
+            final.mean_score          — test-set score after optimization
+            improvement (float)       — final - baseline
             improvement_pct (float)   — improvement as a percentage
-            score_trajectory (list)   — score after each iteration
+            score_trajectory (list)   — train score after each iteration
+            val_trajectory (list)     — val score after each iteration (empty if no val split)
             phase_history (list)      — auto strategy phase breakdown
         """
-        print(f"Done. {result.baseline.mean_score:.4f} → {result.best_score:.4f}")
+        print(f"Done. {result.baseline.mean_score:.4f} → {result.final.mean_score:.4f}")
 
 result = optimizer.run(prompt, callbacks=[MyCallback()])
 ```
 
 You only need to implement the methods you care about. Callbacks that are
 missing a method are skipped silently — there is no base class to inherit from.
+
+The lifecycle order is: `on_run_start` → `on_baseline` → `on_iteration` (×N) → `on_final` → `on_run_end`.
 
 ---
 
@@ -200,13 +234,15 @@ cb = WandbCallback(mode="offline")
 | When | What |
 |------|------|
 | Run start | Config: `strategy`, `reasoning_model`, `max_iterations`, `score_threshold`, `temperature`, `max_workers`, `target_model`, `target_source` |
-| Each iteration | Metrics: `score`, `score_<metric>` (e.g. `score_rouge`) at `step = iteration` |
-| Run end | Summary: `best_score`, `baseline_score`, `improvement`, `improvement_pct`, `converged`, `total_iterations` |
+| Baseline eval | Metric: `score_test` — held-out test score before any optimization |
+| Each iteration | Metrics: `score_train`, `score_val` (when `--val-ratio` is set), `score_<metric>` (e.g. `score_rouge`) |
+| Final eval | Metric: `score_test` — held-out test score after optimization |
+| Run end | Summary: `best_score_train`, `baseline_score`, `final_score_test`, `improvement`, `improvement_pct`, `converged`, `total_iterations` |
 | Run end | Artifact: `best-prompt` (type: `prompt`) containing `best_prompt.txt` |
 
-The score chart in W&B will automatically show the optimization trajectory
-across iterations. The summary fields appear in the run overview table, making
-it easy to compare runs side by side.
+The Charts tab shows `score_train`, `score_val`, and `score_test` (baseline + final) as separate series,
+giving you a clear view of train vs. validation vs. held-out test performance across the run.
+Summary fields appear in the run Overview table, making it easy to compare runs side by side.
 
 ---
 

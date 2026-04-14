@@ -15,17 +15,15 @@ separate server. This also installs
 
 ## Set your API keys
 
-By default, reflex uses Claude for reasoning (analyzing failures, rewriting
-prompts). Set keys for whichever model provider you're using:
+Set keys for whichever model provider you're using:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...    # default reasoning model
-export OPENROUTER_API_KEY=sk-or-...    # if using OpenRouter models
+export OPENROUTER_API_KEY=sk-or-...    # for OpenRouter models (eval + reasoning)
+export ANTHROPIC_API_KEY=sk-ant-...    # if using Claude as the reasoning model
 export OPENAI_API_KEY=sk-...           # if optimizing an OpenAI model
 ```
 
-For local models (Ollama), no extra key is needed — and you can use a local
-reasoning model too so nothing leaves your machine:
+For local models (Ollama), no key is needed — everything runs on your machine:
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
@@ -46,6 +44,7 @@ export OPENROUTER_API_KEY=sk-or-...
 aevyra-reflex optimize examples/security_incidents.jsonl \
   examples/security_incidents_prompt.md \
   -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  --reasoning-model openrouter/qwen/qwen3-8b \
   --judge openrouter/qwen/qwen3-8b \
   --judge-criteria examples/security_incidents_judge.md \
   --max-workers 4 \
@@ -102,7 +101,7 @@ You are a helpful assistant. Answer questions concisely.
 
 ```python
 from aevyra_verdict import Dataset, LLMJudge
-from aevyra_verdict.providers import AnthropicProvider
+from aevyra_verdict.providers import OpenRouterProvider
 from aevyra_reflex import PromptOptimizer
 from pathlib import Path
 
@@ -111,7 +110,7 @@ result = (
     .set_dataset(Dataset.from_jsonl("examples/security_incidents.jsonl"))
     .add_provider("openrouter", "meta-llama/llama-3.1-8b-instruct")
     .add_metric(LLMJudge(
-        judge_provider=AnthropicProvider(model="claude-sonnet-4-6"),
+        judge_provider=OpenRouterProvider(model="qwen/qwen3-8b"),
         criteria=Path("examples/security_incidents_judge.md").read_text(),
     ))
     .run(Path("examples/security_incidents_prompt.md").read_text())
