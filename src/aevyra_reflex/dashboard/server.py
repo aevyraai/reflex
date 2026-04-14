@@ -409,11 +409,25 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         iterations = run.load_iterations()
         log_entries = run.load_log()
 
+        # Compute status the same way list_runs() does so the JS doesn't have
+        # to re-implement the logic and hit the same edge cases.
+        _is_running = run.is_running
+        _has_stale_sentinel = run.running_path.exists() and not _is_running
+        if run.is_complete:
+            _status = "completed"
+        elif _is_running:
+            _status = "running"
+        elif run.has_checkpoint or _has_stale_sentinel:
+            _status = "interrupted"
+        else:
+            _status = "running"
+
         data: dict[str, Any] = {
             "run_id": run.run_id,
             "run_dir": str(run.run_dir),
             "is_complete": run.is_complete,
-            "is_running": run.is_running,
+            "is_running": _is_running,
+            "status": _status,
             "config": config,
             "baseline": baseline,
             "iterations": [
@@ -579,7 +593,13 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         parent_config = parent_run.load_config()
         opt_config = parent_config.get("optimizer_config", {})
 
-        # Build a merged config_dict for the branch job — override strategy + iters
+        # Build a merged config_dict for the branch job — override strategy + iters.
+        # reasoning_model is stored as just the model name in opt_config; we need
+        # to reconstruct the full "provider/model" string that _run_job expects.
+        _r_provider = opt_config.get("reasoning_provider") or ""
+        _r_model = opt_config.get("reasoning_model") or ""
+        _reasoning_raw = f"{_r_provider}/{_r_model}" if _r_provider else _r_model
+
         branch_config = {
             "dataset_path": parent_config.get("dataset_path", ""),
             "prompt": target.system_prompt,
@@ -587,7 +607,8 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             "strategy": strategy,
             "max_iterations": max_iterations,
             "score_threshold": opt_config.get("score_threshold", 0.85),
-            "reasoning_model": opt_config.get("reasoning_model", ""),
+            "reasoning_model": _reasoning_raw,
+            "reasoning_base_url": opt_config.get("reasoning_base_url") or "",
             "metrics": opt_config.get("metrics", ["rouge"]),
             "judge": opt_config.get("judge", ""),
             "judge_criteria": opt_config.get("judge_criteria", ""),

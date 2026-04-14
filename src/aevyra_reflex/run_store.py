@@ -299,9 +299,14 @@ class RunStore:
                 status = "completed"
             elif running_file.exists() and _pid_alive(running_file):
                 status = "running"
-            elif checkpoint_file.exists():
+            elif checkpoint_file.exists() or running_file.exists():
+                # Either we have a checkpoint we can resume from, or we have a
+                # stale running sentinel (process died before writing its first
+                # checkpoint).  Either way the run is interrupted, not running.
                 status = "interrupted"
             else:
+                # No sentinel, no checkpoint, no result — a brand-new run in
+                # the brief window before mark_running() is called.
                 status = "running"
 
             # Scores
@@ -473,6 +478,7 @@ class Run:
             global_best_val_prompt=data.get("global_best_val_prompt"),
             global_best_val_score=data.get("global_best_val_score", -1.0),
             global_best_val_iter=data.get("global_best_val_iter", 0),
+            accumulated_duration_seconds=data.get("accumulated_duration_seconds", 0.0),
             timestamp=data.get("timestamp", ""),
         )
 
@@ -547,6 +553,12 @@ def _pid_alive(p: Path) -> bool:
         pid = int(p.read_text().strip())
         os.kill(pid, 0)  # signal 0 = existence check only
         return True
+    except ProcessLookupError:
+        # No process with that PID — it has exited.
+        return False
+    except PermissionError:
+        # We don't have permission to signal it, but the process is alive.
+        return True
     except Exception:
         return False
 
@@ -596,6 +608,7 @@ def _checkpoint_to_dict(state: CheckpointState) -> dict[str, Any]:
         "previous_reasoning": state.previous_reasoning,
         "strategy_state": state.strategy_state,
         "baseline": state.baseline,
+        "accumulated_duration_seconds": state.accumulated_duration_seconds,
         "timestamp": state.timestamp,
     }
     if state.best_val_prompt is not None:

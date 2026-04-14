@@ -412,8 +412,11 @@ def _bootstrap_exemplars(
             batch_ds = Dataset(conversations=batch)
 
             runner = _make_runner()
+            _judge_before = [getattr(m, "judge_tokens_used", 0) for m in metrics]
             results = runner.run(batch_ds, show_progress=False)
             total_eval_tokens += sum(mr.total_tokens() for mr in results.model_results.values())
+            for _mi, _m in enumerate(metrics):
+                total_eval_tokens += getattr(_m, "judge_tokens_used", 0) - _judge_before[_mi]
 
             for _label, model_result in results.model_results.items():
                 for i, convo in enumerate(batch):

@@ -298,6 +298,7 @@ const el = (tag, attrs, ...children) => {
     else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
     else if (k === 'html') e.innerHTML = v;
+    else if (k === 'disabled') { if (v) e.setAttribute('disabled', ''); else e.removeAttribute('disabled'); }
     else e.setAttribute(k, v);
   });
   children.flat(Infinity).forEach(c => {
@@ -453,14 +454,19 @@ function computeDiff(oldText, newText) {
 }
 
 // ── Runs List Page ───────────────────────────────────────────
-async function renderRunsList() {
+const PAGE_SIZE = 50;
+let _runsPage = 0;
+
+async function renderRunsList(silent = false) {
   const app = $('#app');
-  app.innerHTML = '<div class="loading"><span class="pulse">Loading runs...</span></div>';
+  if (!silent) app.innerHTML = '<div class="loading"><span class="pulse">Loading runs...</span></div>';
 
   let runs;
   try { runs = await api('/api/runs'); } catch (e) {
-    app.innerHTML = '';
-    app.appendChild(el('div', { class: 'empty-state' }, el('h2', null, 'Error loading runs'), el('p', null, e.message)));
+    if (!silent) {
+      app.innerHTML = '';
+      app.appendChild(el('div', { class: 'empty-state' }, el('h2', null, 'Error loading runs'), el('p', null, e.message)));
+    }
     return;
   }
 
@@ -476,18 +482,6 @@ async function renderRunsList() {
     return;
   }
 
-  const header = el('div', { class: 'card-header' },
-    el('span', { class: 'card-title' }, 'Optimization Runs'),
-    el('div', { style: { display: 'flex', alignItems: 'center', gap: '12px' } },
-      el('span', { class: 'muted', style: { fontSize: '13px' } }, runs.length + ' run' + (runs.length !== 1 ? 's' : '')),
-      el('button', { class: 'new-run-btn', onClick: () => { location.hash = '/new'; } }, '+ New Run')
-    )
-  );
-
-  const thead = el('thead', null,
-    el('tr', null, ...['ID','Created','Status','Strategy','Model','Iters','Baseline','Best','Target','Dataset','Reasoning'].map(h => el('th', null, h)))
-  );
-
   // Re-sort runs so each branch appears immediately after its parent
   const runsById = {};
   runs.forEach(r => { runsById[r.run_id] = r; });
@@ -498,16 +492,46 @@ async function renderRunsList() {
       childrenOf[r.parent_run_id].push(r);
     }
   });
-  const sortedRuns = [];
+  // Build sorted list (oldest → newest), then reverse so newest runs appear first.
+  const sortedAsc = [];
   runs.forEach(r => {
     if (!r.parent_run_id) {
-      sortedRuns.push(r);
-      (childrenOf[r.run_id] || []).forEach(child => sortedRuns.push(child));
+      sortedAsc.push(r);
+      (childrenOf[r.run_id] || []).forEach(child => sortedAsc.push(child));
     }
   });
+  const sortedRuns = sortedAsc.slice().reverse();
+
+  const totalPages = Math.max(1, Math.ceil(sortedRuns.length / PAGE_SIZE));
+  _runsPage = Math.max(0, Math.min(_runsPage, totalPages - 1));
+
+  const pageStart = _runsPage * PAGE_SIZE;
+  const pageRuns  = sortedRuns.slice(pageStart, pageStart + PAGE_SIZE);
+
+  const pageLabel = el('span', { class: 'muted', style: { fontSize: '13px' } },
+    runs.length + ' run' + (runs.length !== 1 ? 's' : '') +
+    (totalPages > 1 ? `  ·  page ${_runsPage + 1} of ${totalPages}` : '')
+  );
+  const prevBtn = el('button', { class: 'btn', style: { padding: '4px 10px', fontSize: '12px', opacity: _runsPage === 0 ? '0.3' : '1' }, disabled: _runsPage === 0 }, '← Prev');
+  const nextBtn = el('button', { class: 'btn', style: { padding: '4px 10px', fontSize: '12px', opacity: _runsPage >= totalPages - 1 ? '0.3' : '1' }, disabled: _runsPage >= totalPages - 1 }, 'Next →');
+  prevBtn.addEventListener('click', () => { _runsPage--; renderRunsList(); });
+  nextBtn.addEventListener('click', () => { _runsPage++; renderRunsList(); });
+
+  const header = el('div', { class: 'card-header' },
+    el('span', { class: 'card-title' }, 'Optimization Runs'),
+    el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+      pageLabel,
+      ...(totalPages > 1 ? [prevBtn, nextBtn] : []),
+      el('button', { class: 'new-run-btn', onClick: () => { location.hash = '/new'; } }, '+ New Run')
+    )
+  );
+
+  const thead = el('thead', null,
+    el('tr', null, ...['ID','Created','Status','Strategy','Model','Iters','Baseline','Best','Target','Dataset','Reasoning'].map(h => el('th', null, h)))
+  );
 
   const tbody = el('tbody');
-  sortedRuns.forEach(r => {
+  pageRuns.forEach(r => {
     const isChild = !!r.parent_run_id;
     const ds = r.dataset ? r.dataset.split('/').pop() : '--';
     const rm = (r.config && r.config.reasoning_model) || '--';
@@ -594,6 +618,20 @@ async function renderRunsList() {
   const table = el('table', { class: 'runs' }, thead, tbody);
   const card = el('div', { class: 'card' }, header, table);
   app.appendChild(card);
+
+  // Auto-refresh while any run is still running so the list stays live.
+  const hasRunning = runs.some(r => r.status === 'running');
+  if (hasRunning) {
+    const tid = setTimeout(() => {
+      // Only re-render if we're still on the list page.
+      if (!location.hash || location.hash === '#/' || location.hash === '#') {
+        renderRunsList(true);
+      }
+    }, 5000);
+    // Cancel the timer if the user navigates away before it fires.
+    const onHashChange = () => { clearTimeout(tid); window.removeEventListener('hashchange', onHashChange); };
+    window.addEventListener('hashchange', onHashChange);
+  }
 }
 
 // ── Flow Graph ───────────────────────────────────────────────
@@ -836,7 +874,9 @@ async function renderRunDetail(runId) {
   const improvement = (baselineScore != null && bestScore != null) ? bestScore - baselineScore : null;
   const improvPct = (improvement != null && baselineScore > 0) ? (improvement / baselineScore * 100) : null;
 
-  const status = run.is_complete ? 'completed' : (run.is_running ? 'running' : (checkpoint ? 'interrupted' : 'running'));
+  // Prefer the server-computed status (handles stale sentinels, etc.).
+  // Fall back to client-side derivation for older server versions.
+  const status = run.status || (run.is_complete ? 'completed' : (run.is_running ? 'running' : (checkpoint ? 'interrupted' : 'running')));
 
   // Back button
   app.appendChild(el('button', { class: 'back-btn', onClick: () => { location.hash = '/'; } }, '\u2190 All runs'));
@@ -1918,9 +1958,9 @@ function render() {
   const navRuns = $('#nav-runs');
   if (navRuns) navRuns.className = route.page === 'list' ? 'active' : '';
 
-  if (route.page === 'run') renderRunDetail(route.id);
-  else if (route.page === 'new') renderNewRun();
-  else if (route.page === 'job') renderLiveRun(route.id);
+  if (route.page === 'run') { _runsPage = 0; renderRunDetail(route.id); }
+  else if (route.page === 'new') { _runsPage = 0; renderNewRun(); }
+  else if (route.page === 'job') { _runsPage = 0; renderLiveRun(route.id); }
   else renderRunsList();
 }
 

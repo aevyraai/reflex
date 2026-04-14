@@ -282,6 +282,7 @@ def _run_eval(
     for m in metrics:
         runner.add_metric(m)
 
+    _judge_tokens_before = [getattr(m, "judge_tokens_used", 0) for m in metrics]
     results = runner.run(injected_dataset, show_progress=True)
 
     # Aggregate scores across all models and metrics
@@ -308,6 +309,9 @@ def _run_eval(
 
     mean_score = sum(s for s, _ in all_scores) / len(all_scores)
     total_tokens = sum(mr.total_tokens() for mr in results.model_results.values())
+    # Add judge model tokens (LLMJudge calls are outside model_results)
+    for m in metrics:
+        total_tokens += getattr(m, "judge_tokens_used", 0) - _judge_tokens_before[metrics.index(m)]
 
     # Get the bottom-k failing samples
     sorted_details = sorted(sample_details.values(), key=lambda d: d["score"])

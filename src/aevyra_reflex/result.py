@@ -95,6 +95,9 @@ class OptimizationResult:
     strategy_name: str = ""
     phase_history: list[dict] = field(default_factory=list)  # auto strategy phases
 
+    # LLM-generated post-run analysis (filled by optimizer after run)
+    what_happened: str = ""
+
     # Timing (filled by optimizer)
     duration_seconds: float = 0.0
 
@@ -203,21 +206,31 @@ class OptimizationResult:
             strategy_insight = self._analyze_strategy()
             prompt_insight = self._analyze_prompt_changes()
 
-            if analysis or strategy_insight or prompt_insight:
+            if self.what_happened or analysis or strategy_insight or prompt_insight:
                 lines.append("")
                 lines.append("  WHAT HAPPENED")
                 lines.append("-" * 52)
-                for line in analysis:
-                    lines.append(f"  {line}")
-                if strategy_insight:
-                    if analysis:
+                if self.what_happened:
+                    # LLM-generated analysis — wrap at ~80 chars per line
+                    import textwrap
+                    for paragraph in self.what_happened.strip().split("\n"):
+                        if paragraph.strip():
+                            for wrapped in textwrap.wrap(paragraph.strip(), width=76):
+                                lines.append(f"  {wrapped}")
+                        else:
+                            lines.append("")
+                else:
+                    for line in analysis:
+                        lines.append(f"  {line}")
+                    if strategy_insight:
+                        if analysis:
+                            lines.append("")
+                        for line in strategy_insight:
+                            lines.append(f"  {line}")
+                    if prompt_insight:
                         lines.append("")
-                    for line in strategy_insight:
-                        lines.append(f"  {line}")
-                if prompt_insight:
-                    lines.append("")
-                    for line in prompt_insight:
-                        lines.append(f"  {line}")
+                        for line in prompt_insight:
+                            lines.append(f"  {line}")
                 lines.append("=" * 52)
 
             # Before/after example
@@ -729,6 +742,8 @@ class OptimizationResult:
             d["strategy_name"] = self.strategy_name
         if self.phase_history:
             d["phase_history"] = self.phase_history
+        if self.what_happened:
+            d["what_happened"] = self.what_happened
         return d
 
     def to_json(self, path: str | Path) -> None:

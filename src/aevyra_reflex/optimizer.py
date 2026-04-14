@@ -1217,6 +1217,14 @@ class PromptOptimizer:
             sig_label = "✓ significant" if is_sig else "✗ not significant"
             logger.info(f"{tag} Significance: p={p_val:.4f} ({sig_label} at α=0.05)")
 
+        # LLM-generated post-run analysis
+        try:
+            logger.info(f"{tag} Generating run analysis...")
+            what_happened_prompt = _build_what_happened_prompt(result)
+            result.what_happened = llm.generate(what_happened_prompt, temperature=0.3)
+        except Exception:
+            logger.debug("Failed to generate what_happened analysis", exc_info=True)
+
         # Accumulate token counts across all phases.
         # _resumed_eval_tokens / _resumed_reasoning_tokens carry pre-interruption totals
         # for resumed runs (0 for fresh runs), ensuring accuracy across multiple resumes.
@@ -1356,6 +1364,9 @@ class PromptOptimizer:
         for m in self._metrics:
             runner.add_metric(m)
 
+        # Snapshot judge token counters before running so we can compute the delta
+        _judge_tokens_before = [getattr(m, "judge_tokens_used", 0) for m in self._metrics]
+
         results = runner.run(ds, show_progress=True)
 
         # Aggregate scores and capture per-sample data
@@ -1392,6 +1403,11 @@ class PromptOptimizer:
         total_tokens = sum(
             mr.total_tokens() for mr in results.model_results.values()
         )
+        # Also count tokens used by any LLM judge metrics (scored separately,
+        # not part of model_results). Use the delta since _judge_tokens_before
+        # to avoid double-counting across multiple eval calls.
+        for m, before in zip(self._metrics, _judge_tokens_before):
+            total_tokens += getattr(m, "judge_tokens_used", 0) - before
 
         return EvalSnapshot(
             mean_score=mean,
@@ -1568,3 +1584,155 @@ def _beta_inc_approx(x: float, a: float, b: float) -> float:  # noqa: N802
 
     # Two-tailed p-value
     return float(min(2.0 * ibeta, 1.0))
+
+
+def _build_what_happened_prompt(result: "OptimizationResult") -> str:  # type: ignore[name-defined]
+    """Build the prompt sent to the reasoning model to generate WHAT HAPPENED.
+
+    The prompt is constructed from the actual run data so the analysis is
+    specific to *this* run rather than a generic template.
+    """
+    from aevyra_reflex.result import OptimizationResult  # local import to avoid circular
+
+    r: OptimizationResult = result
+
+    baseline_score = r.baseline.mean_score if r.baseline else 0.0
+    final_score = r.final.mean_score if r.final else (r.best_score or 0.0)
+    improvement = final_score - baseline_score
+    improvement_pct = (improvement / baseline_score * 100) if baseline_score > 0 else 0.0
+    n_iters = len(r.iterations)
+    strategy = r.strategy_name or "unknown"
+    traj = [f"{s:.3f}" for s in r.score_trajectory]
+
+    # Build score trajectory context
+    traj_str = " → ".join(traj) if traj else "(none)"
+    val_traj_str = ""
+    if r.val_trajectory:
+        val_traj_str = " → ".join(f"{s:.3f}" for s in r.val_trajectory)
+
+    # Dataset split info
+    split_info = ""
+    if r.train_size and r.test_size:
+        if r.val_size:
+            split_info = f"{r.train_size} train / {r.val_size} val / {r.test_size} test samples"
+        else:
+            split_info = f"{r.train_size} train / {r.test_size} test samples"
+    elif r.train_size:
+        split_info = f"{r.train_size} samples"
+
+    # Significance
+    sig_str = ""
+    if r.p_value is not None:
+        sig_str = (
+            f"p={r.p_value:.4f} ({'significant' if r.is_significant else 'not significant'} at α=0.05)"
+        )
+
+    # Phase history (auto mode)
+    phase_lines = ""
+    if r.phase_history:
+        parts = []
+        for ph in r.phase_history:
+            axis = ph.get("axis", "?")
+            before = ph.get("score_before", 0.0)
+            after = ph.get("score_after", 0.0)
+            delta = after - before
+            sign = "+" if delta >= 0 else ""
+            parts.append(f"  Phase {ph.get('phase', '?')} ({axis}): {before:.4f} → {after:.4f} ({sign}{delta:.4f})")
+        phase_lines = "\n".join(parts)
+
+    # Failing sample examples (up to 3 worst-performing from final eval)
+    failing_examples = ""
+    if r.final and r.final.samples:
+        sorted_samples = sorted(r.final.samples, key=lambda s: s.score)
+        worst = sorted_samples[:3]
+        parts = []
+        for i, s in enumerate(worst, 1):
+            inp = s.input[:300].replace("\n", " ") if s.input else "(no input)"
+            resp = s.response[:200].replace("\n", " ") if s.response else "(no response)"
+            ideal = s.ideal[:200].replace("\n", " ") if s.ideal else "(no ideal)"
+            parts.append(
+                f"  [{i}] score={s.score:.3f}\n"
+                f"      input  : {inp}\n"
+                f"      actual : {resp}\n"
+                f"      ideal  : {ideal}"
+            )
+        failing_examples = "\n".join(parts)
+
+    # Change summaries — grouped by qualitative category, not iteration number.
+    # Deduplicate similar summaries so the LLM sees patterns, not a numbered list.
+    change_log = ""
+    if r.iterations:
+        changes = [rec.change_summary for rec in r.iterations if rec.change_summary]
+        if changes:
+            change_log = "\n".join(f"  - {c}" for c in changes)
+
+    # Identify which changes correlated with score gains vs drops
+    positive_changes: list[str] = []
+    negative_changes: list[str] = []
+    if r.iterations:
+        for i in range(1, len(r.iterations)):
+            prev = r.iterations[i - 1].score
+            curr = r.iterations[i].score
+            summary = r.iterations[i].change_summary
+            if not summary:
+                continue
+            if curr > prev + 0.005:
+                positive_changes.append(summary)
+            elif curr < prev - 0.005:
+                negative_changes.append(summary)
+
+    effective_log = ""
+    if positive_changes:
+        effective_log += "Changes that raised the score:\n" + "\n".join(f"  - {c}" for c in positive_changes)
+    if negative_changes:
+        if effective_log:
+            effective_log += "\n"
+        effective_log += "Changes that hurt the score:\n" + "\n".join(f"  - {c}" for c in negative_changes)
+
+    # Early stopping
+    early_stop_note = ""
+    if r.early_stopped:
+        early_stop_note = "Yes — validation score plateaued before max iterations."
+
+    # Convergence
+    converged_note = "Yes — met the score threshold." if r.converged else "No."
+
+    # Build the full context block
+    context_parts = [
+        f"Strategy     : {strategy}",
+        f"Iterations   : {n_iters}",
+        f"Dataset split: {split_info}" if split_info else "",
+        f"Baseline     : {baseline_score:.4f}",
+        f"Final        : {final_score:.4f}  ({'+' if improvement >= 0 else ''}{improvement:.4f}, {'+' if improvement_pct >= 0 else ''}{improvement_pct:.1f}%)",
+        f"Converged    : {converged_note}",
+        f"Significance : {sig_str}" if sig_str else "",
+        f"Train traj   : {traj_str}",
+        f"Val traj     : {val_traj_str}" if val_traj_str else "",
+        f"Early stop   : {early_stop_note}" if early_stop_note else "",
+    ]
+    context = "\n".join(line for line in context_parts if line)
+
+    prompt = f"""You are analyzing the results of a prompt optimization run. Write the "WHAT HAPPENED" section — a concise, specific post-run analysis for the user.
+
+--- RUN SUMMARY ---
+{context}
+
+--- WHAT EACH CHANGE DID ---
+{effective_log if effective_log else change_log if change_log else "(no per-iteration change summaries available)"}
+{f"--- PHASE BREAKDOWN (auto strategy) ---{chr(10)}{phase_lines}" if phase_lines else ""}
+--- WORST-PERFORMING SAMPLES FROM FINAL EVAL ---
+{failing_examples if failing_examples else "(no sample-level data available)"}
+
+--- INSTRUCTIONS ---
+Write exactly 2–3 short paragraphs. Be direct and specific. Rules:
+
+- NEVER mention iteration numbers (e.g. "iteration 4", "iter 6"). Talk about *types* of changes: "adding structure", "tightening constraints", "adding explicit examples", etc.
+- Paragraph 1: What worked and why. What kind of prompt change moved the score, and what does that tell us about the model's relationship to this task?
+- Paragraph 2: What failed and why. What kinds of changes hurt or plateaued? What do the worst samples tell us about where the prompt still breaks down?
+- Paragraph 3: One honest diagnosis of the ceiling (prompt problem vs model capability problem) and 1–2 specific next steps grounded in what you saw.
+- Do NOT use bullet points. Plain prose only.
+- Do NOT be generic — every sentence must be grounded in the data above.
+- Do NOT start with "The optimizer".
+- Keep it under 200 words total.
+"""
+    return prompt
