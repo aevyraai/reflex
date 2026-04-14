@@ -395,12 +395,13 @@ class TestWandbCallbackLogging:
         """best_score_train, baseline_score, improvement logged via run.log() on run end."""
         wandb = pytest.importorskip("wandb")
 
-        log_calls = []
+        run_log_calls = []
         run_mock = MagicMock()
         run_mock.url = "offline"
         run_mock.summary = {}
+        run_mock.log = lambda metrics, **kw: run_log_calls.append(metrics)
         monkeypatch.setattr(wandb, "init", lambda **kw: run_mock)
-        monkeypatch.setattr(wandb, "log", lambda metrics, **kw: log_calls.append(metrics))
+        monkeypatch.setattr(wandb, "log", MagicMock())
 
         artifact_mock = MagicMock()
         monkeypatch.setattr(wandb, "Artifact", lambda **kw: artifact_mock)
@@ -409,8 +410,8 @@ class TestWandbCallbackLogging:
         cb.on_run_start(config, "initial")
         cb.on_run_end(make_result(best_score=0.87, baseline_score=0.55))
 
-        # Summary is emitted via run.log(), find the call that has best_score_train
-        summary_call = next(m for m in log_calls if "best_score_train" in m)
+        # Summary is emitted via self._run.log() — find the call with best_score_train
+        summary_call = next(m for m in run_log_calls if "best_score_train" in m)
         assert summary_call["best_score_train"] == pytest.approx(0.87)
         assert summary_call["baseline_score"]   == pytest.approx(0.55)
         assert summary_call["final_score_test"] == pytest.approx(0.87)
