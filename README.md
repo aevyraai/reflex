@@ -96,7 +96,11 @@ Requires `aevyra-verdict`. By default, uses Claude for reasoning
 One command runs baseline eval, optimizes the prompt, re-evaluates, and shows
 a before/after comparison. This example teaches a model to produce strict
 3-sentence executive briefs from security incident reports — starting from a
-vague prompt that scores 0.38 and finishing at 0.89 on a held-out test set:
+vague prompt that scores 0.38 and finishing at 0.89 on a held-out test set.
+
+The example below uses OpenRouter (pay-per-token, no local setup needed), but
+any supported provider works — swap `-m` and `--judge` for Anthropic, OpenAI,
+a local Ollama or vLLM instance, or any OpenAI-compatible endpoint:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-...
