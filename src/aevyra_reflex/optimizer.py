@@ -1592,9 +1592,7 @@ def _build_what_happened_prompt(result: "OptimizationResult") -> str:  # type: i
     The prompt is constructed from the actual run data so the analysis is
     specific to *this* run rather than a generic template.
     """
-    from aevyra_reflex.result import OptimizationResult  # local import to avoid circular
-
-    r: OptimizationResult = result
+    r = result
 
     baseline_score = r.baseline.mean_score if r.baseline else 0.0
     final_score = r.final.mean_score if r.final else (r.best_score or 0.0)
