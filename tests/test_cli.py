@@ -133,12 +133,8 @@ class TestCLICallbackFlags:
         mock_optimizer.run = fake_run
 
         old_modules = {}
-        patches = {
-            "aevyra_verdict": _mock_verdict,
-            "aevyra_verdict.providers": _mock_verdict_providers,
-        }
 
-        # Stub MLflowCallback and WandbCallback in aevyra_reflex.callbacks
+        # Stub MLflowCallback and WandbCallback
         mock_callbacks_mod = MagicMock()
         class _FakeMLflow:
             def __init__(self, experiment_name=None, tracking_uri=None, **kw):
@@ -147,10 +143,38 @@ class TestCLICallbackFlags:
         class _FakeWandb:
             def __init__(self, project=None, **kw):
                 self.project = project
-
         mock_callbacks_mod.MLflowCallback = _FakeMLflow
         mock_callbacks_mod.WandbCallback = _FakeWandb
-        patches["aevyra_reflex.callbacks"] = mock_callbacks_mod
+
+        # Stub aevyra_reflex.optimizer so the local import inside optimize() is mocked
+        mock_optimizer_mod = MagicMock()
+        mock_optimizer_mod.PromptOptimizer = lambda config=None: mock_optimizer
+        mock_optimizer_mod.OptimizerConfig = MagicMock()
+        mock_optimizer_mod._resolve_provider = lambda *a, **kw: {}
+
+        # Stub aevyra_reflex.run_store
+        mock_run_store_mod = MagicMock()
+        mock_run_store_mod.RunStore = MagicMock(return_value=MagicMock(
+            find_incomplete_run=lambda **kw: None,
+            get_run=lambda *a: None,
+        ))
+
+        # Stub aevyra_verdict so Dataset import works
+        mock_verdict_ds = MagicMock()
+        mock_verdict_ds.from_jsonl = lambda *a, **kw: mock_ds
+        mock_verdict_ds.from_csv   = lambda *a, **kw: mock_ds
+        mock_verdict_local = MagicMock()
+        mock_verdict_local.Dataset = mock_verdict_ds
+        mock_verdict_local.RougeScore = _mock_verdict.RougeScore
+        mock_verdict_local.LLMJudge   = _mock_verdict.LLMJudge
+
+        patches = {
+            "aevyra_verdict":           mock_verdict_local,
+            "aevyra_verdict.providers": _mock_verdict_providers,
+            "aevyra_reflex.callbacks":  mock_callbacks_mod,
+            "aevyra_reflex.optimizer":  mock_optimizer_mod,
+            "aevyra_reflex.run_store":  mock_run_store_mod,
+        }
 
         for k, v in patches.items():
             old_modules[k] = sys.modules.get(k)
@@ -160,7 +184,6 @@ class TestCLICallbackFlags:
             from aevyra_reflex import cli
             importlib.reload(cli)
 
-            # Defaults
             defaults = dict(
                 dataset=MagicMock(exists=lambda: True, suffix=".jsonl", name="d.jsonl"),
                 prompt=MagicMock(exists=lambda: True, read_text=lambda: "hi"),
@@ -199,18 +222,6 @@ class TestCLICallbackFlags:
                 verbose=False,
             )
             defaults.update(extra_args)
-
-            # Patch internals so optimize() doesn't actually do anything
-            cli.PromptOptimizer = lambda config=None: mock_optimizer
-            cli._resolve_provider = lambda *a, **kw: {}
-            cli.RunStore = MagicMock(return_value=MagicMock(
-                find_incomplete_run=lambda **kw: None,
-                get_run=lambda *a: None,
-            ))
-            cli.Dataset = MagicMock(
-                from_jsonl=lambda *a, **kw: mock_ds,
-                from_csv=lambda *a, **kw: mock_ds,
-            )
 
             try:
                 cli.optimize(**defaults)
