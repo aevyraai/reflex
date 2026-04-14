@@ -72,6 +72,10 @@ def optimize(
         Optional[str],
         typer.Option("--judge", help="LLM judge in 'provider/model' format. Can be used alone or with --metric."),
     ] = None,
+    judge_criteria: Annotated[
+        Optional[Path],
+        typer.Option("--judge-criteria", help="Path to a text file containing custom evaluation criteria for the LLM judge. Only used with --judge."),
+    ] = None,
     strategy: Annotated[
         str,
         typer.Option("-s", "--strategy", help="Strategy: 'auto' (default), 'iterative', 'pdo', 'fewshot', or 'structural'."),
@@ -240,17 +244,17 @@ def optimize(
     \b
     Examples:
       # Optimize llama to match gpt-4o-mini's score (live benchmark)
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --target openai/gpt-4o-mini
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --target openai/gpt-4o-mini
 
       # Use existing verdict results as the target
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --verdict-results results.json
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --verdict-results results.json
 
       # Multiple targets — best score wins
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 \\
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b\\
         --target openai/gpt-4o-mini --target openai/gpt-4o
 
       # Explicit threshold (ignores --target and --verdict-results)
-      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1 --threshold 0.90
+      aevyra-reflex optimize data.jsonl prompt.md -m local/llama3.1:8b --threshold 0.90
     """
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -394,7 +398,7 @@ def optimize(
             raise typer.Exit(code=1)
         optimizer.add_provider(parts[0], parts[1])
 
-    _add_metrics(optimizer, metric, judge, ds)
+    _add_metrics(optimizer, metric, judge, ds, judge_criteria=judge_criteria)
 
     # If --target models were given, benchmark them now to set the threshold
     if target and threshold is None and not verdict_results:
@@ -825,7 +829,13 @@ def _make_progress_cb(typer_mod):
     return callback
 
 
-def _add_metrics(optimizer, metric_names: list[str], judge: str | None, dataset: Any = None) -> None:
+def _add_metrics(
+    optimizer,
+    metric_names: list[str],
+    judge: str | None,
+    dataset: Any = None,
+    judge_criteria: Optional[Path] = None,
+) -> None:
     """Resolve metric names to verdict Metric instances."""
     from aevyra_verdict import BleuScore, ExactMatch, LLMJudge, RougeScore
     from aevyra_verdict.providers import get_provider
@@ -839,6 +849,11 @@ def _add_metrics(optimizer, metric_names: list[str], judge: str | None, dataset:
     # --metric and --judge are mutually exclusive
     if metric_names and judge:
         typer.echo("Error: use --metric or --judge, not both.", err=True)
+        raise typer.Exit(code=1)
+
+    # --judge-criteria requires --judge
+    if judge_criteria is not None and not judge:
+        typer.echo("Error: --judge-criteria requires --judge to be set.", err=True)
         raise typer.Exit(code=1)
 
     # If neither specified, pick based on whether the dataset has labels.
@@ -895,7 +910,13 @@ def _add_metrics(optimizer, metric_names: list[str], judge: str | None, dataset:
             resolved["provider_name"], resolved["model"],
             **provider_kwargs,
         )
-        optimizer.add_metric(LLMJudge(judge_provider=judge_provider))
+        criteria_text: str | None = None
+        if judge_criteria is not None:
+            if not judge_criteria.exists():
+                typer.echo(f"Error: --judge-criteria file not found: {judge_criteria}", err=True)
+                raise typer.Exit(code=1)
+            criteria_text = judge_criteria.read_text()
+        optimizer.add_metric(LLMJudge(judge_provider=judge_provider, criteria=criteria_text))
 
     if not metric_names and not judge:
         typer.echo("Error: need at least one --metric or --judge.", err=True)

@@ -55,7 +55,7 @@ Best for: prompts that are structurally fine but have wording issues, missing
 constraints, or ambiguous instructions.
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s iterative
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -s iterative
 ```
 
 ## Structural
@@ -78,7 +78,7 @@ Optimizes the *organization and formatting* of the prompt:
 Best for: prompts that are long, disorganized, or missing clear structure.
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s structural
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -s structural
 ```
 
 <Note>
@@ -106,7 +106,7 @@ of the prompt space.
 
 ```bash
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   -s pdo \
   --max-iterations 50
 ```
@@ -127,7 +127,7 @@ Best for: tasks where showing the model examples helps more than refining
 instructions (translation, classification, structured extraction).
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s fewshot
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -s fewshot
 ```
 
 ## Custom strategies
@@ -168,7 +168,7 @@ register_strategy("montecarlo", MonteCarloStrategy)
 Then use it like any built-in:
 
 ```bash
-aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1 -s montecarlo
+aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -s montecarlo
 ```
 
 The `run()` method receives the full eval infrastructure — dataset, providers,

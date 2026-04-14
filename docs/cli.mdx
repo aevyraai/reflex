@@ -23,12 +23,13 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-m`, `--model` | *(required)* | Model to optimize, in `provider/model` format. Examples: `local/llama3.1`, `openai/gpt-5.4-nano`, `openrouter/meta-llama/llama-3.1-8b-instruct` |
+| `-m`, `--model` | *(required)* | Model to optimize, in `provider/model` format. Examples: `local/llama3.1:8b` , `openai/gpt-5.4-nano`, `openrouter/meta-llama/llama-3.1-8b-instruct` |
 | `--target` | — | Target model(s) to benchmark against. The best score becomes the threshold. Repeatable. Mutually exclusive with `--verdict-results` |
 | `--verdict-results` | — | Path to a verdict results JSON file. Sets the threshold from the best model's score. Mutually exclusive with `--target` |
 | `-s`, `--strategy` | `auto` | Optimization strategy: `auto`, `iterative`, `structural`, `pdo`, `fewshot` (or any custom registered strategy) |
 | `--metric` | `rouge` | Scoring metric: `rouge`, `bleu`, `exact`. Mutually exclusive with `--judge` |
 | `--judge` | — | Use an LLM judge instead of automated metrics. Format: `provider/model`. Mutually exclusive with `--metric` |
+| `--judge-criteria` | — | Path to a text file containing a custom evaluation rubric for the judge. Only used with `--judge`. Without this flag the judge uses a default accuracy/helpfulness/clarity/completeness rubric |
 | `--max-iterations` | `10` | Maximum optimization iterations (total budget for auto) |
 | `--threshold` | — | Explicit score threshold (0.0–1.0). Overrides `--target` and `--verdict-results`. Defaults to 0.85 if no target is set |
 | `--max-workers` | `4` | Parallel workers for variant evaluation |
@@ -55,38 +56,38 @@ aevyra-reflex optimize <dataset> <prompt> [OPTIONS]
 ```bash
 # Optimize llama to match gpt-4o-mini (live benchmark sets the target)
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --target openai/gpt-4o-mini \
   -o best_prompt.md
 
 # Multiple targets — the best score wins
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --target openai/gpt-4o-mini \
   --target openai/gpt-4o \
   -o best_prompt.md
 
 # Use existing verdict results as the target
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --verdict-results results.json \
   -o best_prompt.md
 
 # Explicit threshold (overrides --target and --verdict-results)
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --threshold 0.90 \
   -o best_prompt.md
 
 # Auto strategy with defaults (threshold defaults to 0.85)
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --max-workers 4 \
   -o best_prompt.md
 
 # PDO with more rounds
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   -s pdo \
   --max-iterations 50 \
   --results-json results.json
@@ -97,6 +98,13 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
   --judge openrouter/openai/gpt-4o-mini \
   -o best_prompt.md
 
+# Judge with a custom evaluation rubric
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m anthropic/claude-haiku-4-5-20251001 \
+  --judge anthropic/claude-sonnet-4-6 \
+  --judge-criteria rubric.md \
+  -o best_prompt.md
+
 # Use a local Ollama model for reasoning
 aevyra-reflex optimize dataset.jsonl prompt.md \
   -m local/llama3.2:1b \
@@ -105,13 +113,13 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 
 # Use OpenAI for reasoning instead of Claude
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model openai/gpt-4o \
   -o best_prompt.md
 
 # Self-hosted reasoning model (vLLM, TGI, etc.)
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --reasoning-model openai/my-model \
   --reasoning-base-url http://localhost:8000/v1
 ```
@@ -121,17 +129,17 @@ aevyra-reflex optimize dataset.jsonl prompt.md \
 ```bash
 # Resume the latest interrupted run for this dataset
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --resume
 
 # Resume a specific run by ID
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --resume-from 003
 
 # Use a custom run directory
 aevyra-reflex optimize dataset.jsonl prompt.md \
-  -m local/llama3.1 \
+  -m local/llama3.1:8b\
   --run-dir ./my-experiments/.reflex \
   -o best_prompt.md
 ```
@@ -191,7 +199,7 @@ Models are specified as `provider/model`:
 
 | Provider | Format | API key env var |
 |----------|--------|-----------------|
-| Local (Ollama) | `local/llama3.1` | — |
+| Local (Ollama) | `local/llama3.1:8b` | — |
 | OpenAI | `openai/gpt-5.4-nano` | `OPENAI_API_KEY` |
 | OpenRouter | `openrouter/meta-llama/llama-3.1-8b-instruct` | `OPENROUTER_API_KEY` |
 | Together | `together/meta-llama/Llama-3.1-8B-Instruct` | `TOGETHER_API_KEY` |

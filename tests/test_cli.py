@@ -41,7 +41,7 @@ _mock_verdict = MagicMock()
 _mock_verdict.RougeScore = lambda: MagicMock()
 _mock_verdict.BleuScore = lambda: MagicMock()
 _mock_verdict.ExactMatch = lambda: MagicMock()
-_mock_verdict.LLMJudge = lambda judge_provider=None: MagicMock()
+_mock_verdict.LLMJudge = lambda judge_provider=None, criteria=None: MagicMock()
 
 _mock_verdict_providers = MagicMock()
 _mock_verdict_providers.get_provider = lambda *a, **kw: MagicMock()
