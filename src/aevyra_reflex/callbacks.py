@@ -140,6 +140,7 @@ class MLflowCallback:
         self.tags = tags or {}
         self.log_prompt_each_iter = log_prompt_each_iter
         self._mlflow_run = None
+        self._iteration_rows: list[dict] = []
 
     def on_run_start(self, config: Any, initial_prompt: str) -> None:
         try:
@@ -159,6 +160,13 @@ class MLflowCallback:
 
         self._mlflow_run = mlflow.start_run(run_name=run_name, tags=self.tags)
 
+        tracking_uri = mlflow.get_tracking_uri()
+        logger.info(
+            f"[MLflow] run started: {self._mlflow_run.info.run_id} "
+            f"| experiment: {self.experiment_name} "
+            f"| tracking URI: {tracking_uri}"
+        )
+
         # Log config as params
         params = {
             "strategy":        getattr(config, "strategy", ""),
@@ -176,6 +184,7 @@ class MLflowCallback:
         mlflow.log_params(params)
         logger.info(f"MLflow run started: {self._mlflow_run.info.run_id}")
 
+
     def on_iteration(self, record: Any) -> None:
         try:
             import mlflow
@@ -190,14 +199,39 @@ class MLflowCallback:
             mlflow.log_metric(f"score_{metric_name}", metric_score, step=step)
 
         if self.log_prompt_each_iter:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".txt", prefix=f"prompt_iter_{step}_",
-                delete=False
-            ) as f:
+            iter_dir = f"iterations/iter_{step:03d}"
+
+            # Prompt used this iteration
+            prompt_file = os.path.join(tempfile.gettempdir(), f"prompt_iter_{step:03d}.txt")
+            with open(prompt_file, "w") as f:
                 f.write(record.system_prompt)
-                tmp_path = f.name
-            mlflow.log_artifact(tmp_path, artifact_path="prompts")
-            os.unlink(tmp_path)
+            mlflow.log_artifact(prompt_file, artifact_path=iter_dir)
+            os.unlink(prompt_file)
+
+            # Reasoning explanation for this iteration
+            if getattr(record, "reasoning", None):
+                reasoning_file = os.path.join(tempfile.gettempdir(), f"reasoning_iter_{step:03d}.txt")
+                with open(reasoning_file, "w") as f:
+                    f.write(record.reasoning)
+                mlflow.log_artifact(reasoning_file, artifact_path=iter_dir)
+                os.unlink(reasoning_file)
+
+        # Accumulate iteration rows and log as a browsable table in Artifacts → iterations.json
+        reasoning = getattr(record, "reasoning", "") or ""
+        self._iteration_rows.append({
+            "iteration":        step,
+            "score":            round(record.score, 4),
+            **{f"score_{k}": round(v, 4) for k, v in (record.scores_by_metric or {}).items()},
+            "prompt":           record.system_prompt,
+            "reasoning":        reasoning,
+        })
+        try:
+            # log_table expects dict-of-lists, not list-of-dicts
+            keys = list(self._iteration_rows[0].keys())
+            table = {k: [row.get(k, "") for row in self._iteration_rows] for k in keys}
+            mlflow.log_table(data=table, artifact_file="iterations.json")
+        except Exception as e:
+            logger.warning(f"[MLflow] log_table failed: {e}")
 
     def on_run_end(self, result: Any) -> None:
         try:

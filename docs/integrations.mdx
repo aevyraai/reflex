@@ -40,10 +40,22 @@ standard tracking API. No server required — by default it writes to a local
 **Install:**
 
 ```bash
-pip install mlflow
+pip install aevyra-reflex[mlflow]
 ```
 
-**Minimal usage:**
+**CLI:**
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m openrouter/llama3 --mlflow
+
+# Custom experiment name and remote tracking server
+aevyra-reflex optimize dataset.jsonl prompt.md -m openrouter/llama3 \
+  --mlflow \
+  --mlflow-experiment security-incidents \
+  --mlflow-tracking-uri http://localhost:5000
+```
+
+**Python API:**
 
 ```python
 from aevyra_reflex import MLflowCallback
@@ -138,11 +150,22 @@ missing a method are skipped silently — there is no base class to inherit from
 **Install:**
 
 ```bash
-pip install wandb
+pip install aevyra-reflex[wandb]
 wandb login  # one-time setup
 ```
 
-**Minimal usage:**
+**CLI:**
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md -m openrouter/llama3 --wandb
+
+# Custom project name
+aevyra-reflex optimize dataset.jsonl prompt.md -m openrouter/llama3 \
+  --wandb \
+  --wandb-project security-incidents
+```
+
+**Python API:**
 
 ```python
 from aevyra_reflex import WandbCallback
