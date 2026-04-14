@@ -216,6 +216,26 @@ models.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    DS[Dataset\nJSONL / CSV]:::data
+    ST[Strategy\nauto]:::reflex
+    RM[Reasoning\nmodel]:::reflex
+    EV[verdict\nevals]:::eval
+    OUT[Optimized\nprompt]:::output
+
+    DS --> ST
+    ST -->|rewrites| RM
+    RM -->|revised prompt| EV
+    EV -->|score feedback| ST
+    ST --> OUT
+
+    classDef data    fill:#6E3FF3,color:#fff,stroke:none
+    classDef reflex  fill:#9B6BFF,color:#fff,stroke:none
+    classDef eval    fill:#3FBFFF,color:#fff,stroke:none
+    classDef output  fill:#2ECC71,color:#fff,stroke:none
+```
+
 Reflex is an agent, not a script. It draws from four optimization axes:
 
 - **iterative** — diagnose specific failure patterns and surgically revise the
@@ -238,8 +258,25 @@ Each axis can be used standalone with `-s iterative`, `-s pdo`, etc.
 4. Re-evaluate — if threshold is met, stop; otherwise pick the next axis
 5. Repeat until the global budget runs out
 
-A typical auto run: structural (fix formatting) → iterative (fix wording) →
-fewshot (add examples), each phase building on the previous.
+```mermaid
+flowchart LR
+    B([baseline\n0.39]):::neutral
+    S[structural\n0.86]:::big
+    F[fewshot\n0.83]:::phase
+    I[iterative\n0.83]:::phase
+    P[PDO\n1.00]:::big
+    T([test set\n0.89]):::neutral
+
+    B --> S --> F --> I --> P --> T
+
+    classDef neutral fill:#444,color:#fff,stroke:none
+    classDef phase   fill:#9B6BFF,color:#fff,stroke:none
+    classDef big     fill:#2ECC71,color:#fff,stroke:none
+```
+
+Each phase hands its best prompt to the next. Green = phases where the score
+jumped; purple = phases that contributed but didn't break out. Scores are from
+the [security incidents tutorial](docs/tutorial-security-incidents.mdx).
 
 ### Iterative strategy
 
