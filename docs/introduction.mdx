@@ -121,35 +121,46 @@ You can also run any strategy directly.
   </Card>
 </CardGroup>
 
+A typical **auto** run (from the [security incidents tutorial](/reflex/tutorial-security-incidents)):
+
+```mermaid
+flowchart LR
+    B([baseline\n0.39]):::neutral
+    S[structural\n0.86]:::big
+    F[fewshot\n0.83]:::phase
+    I[iterative\n0.83]:::phase
+    P[PDO\n1.00]:::big
+    T([test set\n0.89]):::neutral
+
+    B --> S --> F --> I --> P --> T
+
+    classDef neutral fill:#444,color:#fff,stroke:none
+    classDef phase   fill:#9B6BFF,color:#fff,stroke:none
+    classDef big     fill:#2ECC71,color:#fff,stroke:none
+```
+
+Each phase hands its best prompt to the next. Structural made the biggest jump (formatting was the main gap); PDO polished it to convergence.
+
 ## How it fits together
 
-```
-                ┌──────────────┐
-                │   Dataset    │
-                │ (JSONL/CSV)  │
-                └──────┬───────┘
-                       │
-                       ▼
-  ┌─────────────────────────────────────┐
-  │         aevyra-reflex               │
-  │                                     │
-  │  ┌───────────┐   ┌──────────────┐  │
-  │  │  Strategy  │──▶│  Reasoning   │  │
-  │  │  (auto)    │   │  model (LLM) │  │
-  │  └─────┬─────┘   └──────────────┘  │
-  │        │                            │
-  │        ▼                            │
-  │  ┌───────────┐                      │
-  │  │  verdict   │  ← evaluates each   │
-  │  │  (evals)   │    prompt revision   │
-  │  └───────────┘                      │
-  └─────────────────────────────────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │ Optimized      │
-              │ system prompt  │
-              └────────────────┘
+```mermaid
+flowchart LR
+    DS[Dataset\nJSONL / CSV]:::data
+    ST[Strategy\nauto]:::reflex
+    RM[Reasoning\nmodel]:::reflex
+    EV[verdict\nevals]:::eval
+    OUT[Optimized\nprompt]:::output
+
+    DS --> ST
+    ST -->|rewrites| RM
+    RM -->|revised prompt| EV
+    EV -->|score feedback| ST
+    ST --> OUT
+
+    classDef data    fill:#6E3FF3,color:#fff,stroke:none
+    classDef reflex  fill:#9B6BFF,color:#fff,stroke:none
+    classDef eval    fill:#3FBFFF,color:#fff,stroke:none
+    classDef output  fill:#2ECC71,color:#fff,stroke:none
 ```
 
 <CardGroup cols={2}>
