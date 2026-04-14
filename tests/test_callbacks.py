@@ -81,6 +81,17 @@ class TestMLflowCallbackLogging:
     def tracking_dir(self, tmp_path):
         return str(tmp_path / "mlruns")
 
+    @pytest.fixture(autouse=True)
+    def end_mlflow_run(self):
+        """Ensure any active MLflow run is ended after each test, even on failure."""
+        yield
+        try:
+            import mlflow
+            if mlflow.active_run():
+                mlflow.end_run()
+        except ImportError:
+            pass
+
     @pytest.fixture()
     def config(self):
         cfg = MagicMock()
@@ -124,7 +135,7 @@ class TestMLflowCallbackLogging:
             cb.on_iteration(r)
 
         client = mlflow.MlflowClient(tracking_uri=tracking_dir)
-        history = client.get_metric_history(run_id, "score")
+        history = client.get_metric_history(run_id, "score_train")
         assert [m.value for m in history] == [0.62, 0.74, 0.87]
         assert [m.step  for m in history] == [1, 2, 3]
 
@@ -160,10 +171,11 @@ class TestMLflowCallbackLogging:
         client = mlflow.MlflowClient(tracking_uri=tracking_dir)
         metrics = client.get_run(run_id).data.metrics
 
-        assert metrics["best_score"]     == pytest.approx(0.87)
-        assert metrics["baseline_score"] == pytest.approx(0.55)
-        assert metrics["improvement"]    == pytest.approx(0.32)
-        assert metrics["converged"]      == 1.0
+        assert metrics["best_score_train"] == pytest.approx(0.87)
+        assert metrics["baseline_score"]   == pytest.approx(0.55)
+        assert metrics["final_score_test"] == pytest.approx(0.87)
+        assert metrics["improvement"]      == pytest.approx(0.32)
+        assert metrics["converged"]        == 1.0
         assert metrics["total_iterations"] == 3.0
 
     def test_best_prompt_artifact_saved(self, tracking_dir, config):
@@ -353,7 +365,7 @@ class TestWandbCallbackLogging:
         assert init_calls[0]["config"]["reasoning_model"] == "claude-sonnet-4-20250514"
 
     def test_metrics_logged_per_iteration(self, config, monkeypatch):
-        """score and per-metric scores are logged at the right step."""
+        """score_train and per-metric scores are logged for each iteration."""
         wandb = pytest.importorskip("wandb")
         log_calls = []
 
@@ -361,7 +373,7 @@ class TestWandbCallbackLogging:
         run_mock.url = "offline"
         run_mock.summary = {}
         monkeypatch.setattr(wandb, "init", lambda **kw: run_mock)
-        monkeypatch.setattr(wandb, "log", lambda metrics, step=None: log_calls.append((metrics, step)))
+        monkeypatch.setattr(wandb, "log", lambda metrics, **kw: log_calls.append(metrics))
         monkeypatch.setattr(wandb, "Artifact", MagicMock())
 
         cb = WandbCallback()
@@ -369,23 +381,25 @@ class TestWandbCallbackLogging:
         cb.on_iteration(make_record(1, 0.62, {"rouge": 0.62, "bleu": 0.55}))
         cb.on_iteration(make_record(2, 0.74, {"rouge": 0.74, "bleu": 0.68}))
 
-        steps = [step for _, step in log_calls]
-        assert 1 in steps
-        assert 2 in steps
+        # Two iteration log calls should have been made
+        iter_calls = [m for m in log_calls if "score_train" in m]
+        assert len(iter_calls) == 2
 
-        first = next(m for m, s in log_calls if s == 1)
-        assert first["score"] == 0.62
+        first = iter_calls[0]
+        assert first["score_train"] == 0.62
+        assert first["iteration"]   == 1
         assert first["score_rouge"] == 0.62
-        assert first["score_bleu"] == 0.55
+        assert first["score_bleu"]  == 0.55
 
     def test_summary_set_on_run_end(self, config, monkeypatch):
-        """best_score, baseline_score, improvement written to run.summary."""
+        """best_score_train, baseline_score, improvement logged via run.log() on run end."""
         wandb = pytest.importorskip("wandb")
 
-        summary = {}
+        run_log_calls = []
         run_mock = MagicMock()
         run_mock.url = "offline"
-        run_mock.summary = summary
+        run_mock.summary = {}
+        run_mock.log = lambda metrics, **kw: run_log_calls.append(metrics)
         monkeypatch.setattr(wandb, "init", lambda **kw: run_mock)
         monkeypatch.setattr(wandb, "log", MagicMock())
 
@@ -396,10 +410,13 @@ class TestWandbCallbackLogging:
         cb.on_run_start(config, "initial")
         cb.on_run_end(make_result(best_score=0.87, baseline_score=0.55))
 
-        assert summary["best_score"]     == pytest.approx(0.87)
-        assert summary["baseline_score"] == pytest.approx(0.55)
-        assert summary["improvement"]    == pytest.approx(0.32)
-        assert summary["converged"]      is True
+        # Summary is emitted via self._run.log() — find the call with best_score_train
+        summary_call = next(m for m in run_log_calls if "best_score_train" in m)
+        assert summary_call["best_score_train"] == pytest.approx(0.87)
+        assert summary_call["baseline_score"]   == pytest.approx(0.55)
+        assert summary_call["final_score_test"] == pytest.approx(0.87)
+        assert summary_call["improvement"]      == pytest.approx(0.32)
+        assert summary_call["converged"]        == 1.0
 
     def test_best_prompt_artifact_created(self, config, monkeypatch):
         """Best prompt is saved as a W&B artifact."""

@@ -230,6 +230,26 @@ def optimize(
             ),
         ),
     ] = 3,
+    mlflow: Annotated[
+        bool,
+        typer.Option("--mlflow", help="Log the run to MLflow (requires pip install mlflow)."),
+    ] = False,
+    mlflow_experiment: Annotated[
+        Optional[str],
+        typer.Option("--mlflow-experiment", help="MLflow experiment name. Defaults to 'aevyra-reflex'."),
+    ] = None,
+    mlflow_tracking_uri: Annotated[
+        Optional[str],
+        typer.Option("--mlflow-tracking-uri", help="MLflow tracking URI (e.g. http://localhost:5000). Defaults to local ./mlruns."),
+    ] = None,
+    wandb: Annotated[
+        bool,
+        typer.Option("--wandb", help="Log the run to Weights & Biases (requires pip install wandb)."),
+    ] = False,
+    wandb_project: Annotated[
+        Optional[str],
+        typer.Option("--wandb-project", help="W&B project name. Defaults to 'aevyra-reflex'."),
+    ] = None,
     verbose: Annotated[
         bool,
         typer.Option("-v", "--verbose", help="Show debug output."),
@@ -484,6 +504,13 @@ def optimize(
     if val_split > 0.0:
         es_label = f"  patience={early_stopping_patience}" if early_stopping_patience > 0 else "  early stopping disabled"
         typer.echo(f"  Val split  : {val_split:.0%} of total ({es_label})")
+    if mlflow:
+        exp = mlflow_experiment or "aevyra-reflex"
+        uri_note = f" → {mlflow_tracking_uri}" if mlflow_tracking_uri else " → ./mlruns"
+        typer.echo(f"  MLflow     : {exp}{uri_note}")
+    if wandb:
+        proj = wandb_project or "aevyra-reflex"
+        typer.echo(f"  W&B        : {proj}")
     typer.echo("=" * 52)
     typer.echo()
 
@@ -524,6 +551,21 @@ def optimize(
                     f"{cp.completed_iterations} (best: {cp.best_score:.4f})"
                 )
 
+    # Build callbacks list
+    _callbacks = []
+    if mlflow:
+        from aevyra_reflex.callbacks import MLflowCallback
+        _callbacks.append(MLflowCallback(
+            experiment_name=mlflow_experiment or "aevyra-reflex",
+            tracking_uri=mlflow_tracking_uri,
+            log_prompt_each_iter=False,  # table covers per-iter data
+        ))
+    if wandb:
+        from aevyra_reflex.callbacks import WandbCallback
+        _callbacks.append(WandbCallback(
+            project=wandb_project or "aevyra-reflex",
+        ))
+
     # Run the full pipeline: baseline → optimize → verify
     typer.echo("Step 1/3  Running baseline eval...")
     typer.echo()
@@ -533,6 +575,7 @@ def optimize(
         on_iteration=_make_progress_cb(typer),
         run_store=store,
         resume_run=resume_run,
+        callbacks=_callbacks or None,
     )
 
     # Show results

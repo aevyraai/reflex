@@ -835,6 +835,14 @@ class PromptOptimizer:
                     ],
                 })
 
+        # Fire on_baseline so callbacks can log the test-set baseline score
+        for cb in _callbacks:
+            if hasattr(cb, "on_baseline"):
+                try:
+                    cb.on_baseline(baseline)
+                except Exception:
+                    logger.exception(f"Callback {cb!r} raised in on_baseline")
+
         # Write an initial checkpoint immediately after the baseline so that
         # a crash during the very first iteration (e.g. mid-variant-eval) still
         # produces a resumable run.  Without this, checkpoint.json is never
@@ -959,14 +967,6 @@ class PromptOptimizer:
                 _es["best_train_score"] = record.score
                 _es["best_train_prompt"] = record.system_prompt
 
-            if on_iteration:
-                on_iteration(record)
-            for cb in _callbacks:
-                if hasattr(cb, "on_iteration"):
-                    try:
-                        cb.on_iteration(record)
-                    except Exception:
-                        logger.exception(f"Callback {cb!r} raised in on_iteration")
             if run:
                 _es["trajectory"].append(record.score)
                 # Update checkpoint (iteration saved after val eval below)
@@ -1015,6 +1015,16 @@ class PromptOptimizer:
                     _es["global_best_val_prompt"] = record.system_prompt
                     _es["global_best_val_iter"] = record.iteration
                     _es["global_best_val_train_score"] = record.score
+
+            # Fire on_iteration callbacks after val eval so val_score is populated
+            if on_iteration:
+                on_iteration(record)
+            for cb in _callbacks:
+                if hasattr(cb, "on_iteration"):
+                    try:
+                        cb.on_iteration(record)
+                    except Exception:
+                        logger.exception(f"Callback {cb!r} raised in on_iteration")
 
             # Save iteration after val eval so val_score is included
             if run:
@@ -1252,6 +1262,14 @@ class PromptOptimizer:
                 else f"{_dur_s}s"
             )
             logger.info(f"Run {run.run_id} saved to {run.run_dir}  (total duration: {_dur_label})")
+
+        # Fire on_final so callbacks can log the final test-set score before on_run_end
+        for cb in _callbacks:
+            if hasattr(cb, "on_final"):
+                try:
+                    cb.on_final(final)
+                except Exception:
+                    logger.exception(f"Callback {cb!r} raised in on_final")
 
         # Fire on_run_end
         for cb in _callbacks:

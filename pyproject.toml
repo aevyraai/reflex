@@ -43,18 +43,24 @@ openai   = ["openai>=2.31.0",       "aevyra-verdict[openai]>=0.1.0"]
 google   = ["google-genai>=1.0", "aevyra-verdict[google]>=0.1.0"]
 mistral  = ["mistralai>=1.0",    "aevyra-verdict[mistral]>=0.1.0"]
 cohere   = ["cohere>=5.0",       "aevyra-verdict[cohere]>=0.1.0"]
+mlflow   = ["mlflow>=2.0"]
+wandb    = ["wandb>=0.17"]
 all      = [
     "openai>=2.31.0",
     "google-genai>=1.0",
     "mistralai>=1.0",
     "cohere>=5.0",
     "aevyra-verdict[all]>=0.1.0",
+    "mlflow>=2.0",
+    "wandb>=0.17",
 ]
 stats = ["scipy>=1.15.3"]
 dev = [
     "pytest>=9.0.3",
     "ruff>=0.4",
     "scipy>=1.15.3",
+    "mlflow>=2.0",
+    "wandb>=0.17",
 ]
 
 [project.scripts]
