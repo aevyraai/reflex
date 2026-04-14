@@ -1,6 +1,7 @@
 # aevyra-reflex
 
 [![CI](https://github.com/aevyraai/reflex/actions/workflows/ci.yml/badge.svg)](https://github.com/aevyraai/reflex/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/aevyra-reflex.svg)](https://pypi.org/project/aevyra-reflex/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-aevyra.mintlify.app-7B5CF8)](https://aevyra.mintlify.app/reflex/introduction)
 

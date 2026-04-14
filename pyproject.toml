@@ -61,6 +61,7 @@ dev = [
     "scipy>=1.15.3",
     "mlflow>=2.0",
     "wandb>=0.17",
+    "openai>=2.31.0",
 ]
 
 [project.scripts]
