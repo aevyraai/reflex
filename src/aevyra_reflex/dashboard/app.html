@@ -477,7 +477,7 @@ async function renderRunsList(silent = false) {
       el('h2', null, 'No runs yet'),
       el('p', { style: { marginBottom: '16px' } }, 'Start your first optimization run from the UI or the CLI:'),
       el('button', { class: 'btn btn-primary', style: { marginBottom: '16px' }, onClick: () => { location.hash = '/new'; } }, '+ New Run'),
-      el('p', null, el('code', null, 'aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b ))
+      el('p', null, el('code', null, 'aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b'))
     ));
     return;
   }
@@ -1264,13 +1264,25 @@ function renderNewRun() {
     el('div', { class: 'form-hint' }, 'Paste your starting system prompt. Reflex will optimize it against your dataset.')
   ));
 
+  // ── Mode toggle: Standard vs Pipeline ──────────────────────
+  let runMode = 'standard'; // 'standard' | 'pipeline'
+  const modeStdBtn      = el('button', { class: 'prompt-tab active', type: 'button' }, 'Standard');
+  const modePipelineBtn = el('button', { class: 'prompt-tab',        type: 'button' }, 'Pipeline');
+  const modeTabs = el('div', { class: 'prompt-tabs', style: { marginBottom: '16px' } }, modeStdBtn, modePipelineBtn);
+  wrap.appendChild(el('div', { class: 'form-group' },
+    el('label', { class: 'form-label' }, 'Input Mode'),
+    modeTabs,
+    el('div', { class: 'form-hint' }, 'Standard: optimize a prompt used in a single LLM call. Pipeline: optimize a prompt inside a multi-step agent pipeline (classify → retrieve → generate).')
+  ));
+
   // ── Dataset path ──────────────────────────────────────────
   const datasetInput = el('input', { class: 'form-input', type: 'text', placeholder: '/path/to/data.jsonl' });
-  wrap.appendChild(el('div', { class: 'form-group' },
+  const datasetGroup = el('div', { class: 'form-group' },
     el('label', { class: 'form-label' }, 'Dataset', el('span', null, 'absolute or relative path to a .jsonl file')),
     datasetInput,
     el('div', { class: 'form-hint' }, 'Supports OpenAI, ShareGPT, and Alpaca formats — auto-detected. Each line is one example.')
-  ));
+  );
+  wrap.appendChild(datasetGroup);
 
   // ── Model + Metric row ────────────────────────────────────
   const MODEL_KEY_INFO = {
@@ -1404,7 +1416,7 @@ function renderNewRun() {
       if (typeof switchThreshTab === 'function') switchThreshTab(prevThreshMode);
     }
   });
-  wrap.appendChild(el('div', { class: 'form-row' },
+  const modelGroup = el('div', { class: 'form-row' },
     el('div', { class: 'form-group', style: { marginBottom: '0' } },
       el('label', { class: 'form-label' }, 'Target Model', el('span', null, 'provider/model')),
       modelInput,
@@ -1418,7 +1430,8 @@ function renderNewRun() {
       judgeHint,
       judgeScoringSection
     )
-  ));
+  );
+  wrap.appendChild(modelGroup);
 
   // ── Strategy + Iterations + Threshold row ─────────────────
   const strategySel = el('select', { class: 'form-select' },
@@ -1580,6 +1593,46 @@ function renderNewRun() {
     )
   ));
 
+  // ── Pipeline file ──────────────────────────────────────────
+  const pipelineFileInput = el('input', { class: 'form-input', type: 'text', placeholder: '/path/to/pipeline.py' });
+  const pipelineGroup = el('div', { class: 'form-group', style: { display: 'none' } },
+    el('label', { class: 'form-label' }, 'Pipeline File', el('span', null, 'absolute or relative path to a .py file')),
+    pipelineFileInput,
+    el('div', { class: 'form-hint' }, 'Must define pipeline_fn(prompt: str, input: Any) -> AgentTrace. Each optimization iteration re-runs this function with the current candidate prompt.')
+  );
+  wrap.appendChild(pipelineGroup);
+
+  // ── Inputs file ────────────────────────────────────────────
+  const inputsFileInput = el('input', { class: 'form-input', type: 'text', placeholder: '/path/to/inputs.json' });
+  const inputsGroup = el('div', { class: 'form-group', style: { display: 'none' } },
+    el('label', { class: 'form-label' }, 'Inputs File', el('span', null, 'JSON array or JSONL')),
+    inputsFileInput,
+    el('div', { class: 'form-hint' }, 'JSON file containing a list of inputs (["input1", "input2", ...]) or JSONL (one value per line). Each input is passed to pipeline_fn.')
+  );
+  wrap.appendChild(inputsGroup);
+
+  // ── Mode toggle event listeners ────────────────────────────
+  const pdoOpt = strategySel.querySelector('option[value="pdo"]');
+  modeStdBtn.addEventListener('click', () => {
+    runMode = 'standard';
+    modeStdBtn.classList.add('active'); modePipelineBtn.classList.remove('active');
+    datasetGroup.style.display = '';
+    modelGroup.style.display = '';
+    pipelineGroup.style.display = 'none';
+    inputsGroup.style.display = 'none';
+    if (pdoOpt) pdoOpt.disabled = false;
+  });
+  modePipelineBtn.addEventListener('click', () => {
+    runMode = 'pipeline';
+    modePipelineBtn.classList.add('active'); modeStdBtn.classList.remove('active');
+    datasetGroup.style.display = 'none';
+    modelGroup.style.display = 'none';
+    pipelineGroup.style.display = '';
+    inputsGroup.style.display = '';
+    if (pdoOpt) pdoOpt.disabled = true;
+    if (strategySel.value === 'pdo') strategySel.value = 'auto';
+  });
+
   // ── Advanced options (collapsible) ────────────────────────
   const advBody = el('div', { style: { display: 'none', marginTop: '14px' } });
 
@@ -1702,9 +1755,14 @@ function renderNewRun() {
 
     errBox.style.display = 'none';
     if (!prompt) { errBox.textContent = 'Prompt is required.'; errBox.style.display = 'block'; return; }
-    if (!datasetPath) { errBox.textContent = 'Dataset path is required.'; errBox.style.display = 'block'; return; }
-    if (!model) { errBox.textContent = 'Model is required (e.g. openai/gpt-4o-mini).'; errBox.style.display = 'block'; return; }
-    if (!model.includes('/')) { errBox.textContent = 'Model must be in provider/model format, e.g. openai/gpt-4o-mini.'; errBox.style.display = 'block'; return; }
+    if (runMode === 'pipeline') {
+      if (!pipelineFileInput.value.trim()) { errBox.textContent = 'Pipeline file is required in pipeline mode.'; errBox.style.display = 'block'; return; }
+      if (!inputsFileInput.value.trim()) { errBox.textContent = 'Inputs file is required in pipeline mode.'; errBox.style.display = 'block'; return; }
+    } else {
+      if (!datasetPath) { errBox.textContent = 'Dataset path is required.'; errBox.style.display = 'block'; return; }
+      if (!model) { errBox.textContent = 'Model is required (e.g. openai/gpt-4o-mini).'; errBox.style.display = 'block'; return; }
+      if (!model.includes('/')) { errBox.textContent = 'Model must be in provider/model format, e.g. openai/gpt-4o-mini.'; errBox.style.display = 'block'; return; }
+    }
     if (threshMode === 'verdict' && !threshVerdictInput.value.trim()) { errBox.textContent = 'Verdict results path is required when using "From verdict" threshold.'; errBox.style.display = 'block'; return; }
     if (threshMode === 'auto' && !threshAutoInput.value.trim()) { errBox.textContent = 'At least one target model is required for Auto threshold.'; errBox.style.display = 'block'; return; }
     if (threshMode === 'auto' && threshAutoInput.value.split(',').map(s => s.trim()).filter(Boolean).some(m => !m.includes('/'))) { errBox.textContent = 'Each target model must be in provider/model format (e.g. openai/gpt-4o-mini).'; errBox.style.display = 'block'; return; }
@@ -1717,8 +1775,10 @@ function renderNewRun() {
     try {
       const body = {
         prompt,
-        dataset_path: datasetPath,
-        model,
+        dataset_path: runMode === 'pipeline' ? '' : datasetPath,
+        model: runMode === 'pipeline' ? '' : model,
+        pipeline_file: runMode === 'pipeline' ? pipelineFileInput.value.trim() : '',
+        inputs_file: runMode === 'pipeline' ? inputsFileInput.value.trim() : '',
         metrics: metricSel.value === 'judge' ? [] : [metricSel.value],
         judge: metricSel.value === 'judge' ? judgeInput.value.trim() : '',
         judge_criteria: (metricSel.value === 'judge' && judgeScoringMode === 'single') ? judgeCriteria.value.trim() : '',

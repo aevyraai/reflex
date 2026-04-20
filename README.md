@@ -441,6 +441,11 @@ pip install "aevyra-reflex[stats]"   # enables Wilcoxon test
 
 ## Choosing a reasoning model
 
+Reflex automatically detects the dominant language of your dataset (Chinese,
+Japanese, Korean, Arabic, Russian, etc.) and instructs the reasoning model to
+write all revised prompts and explanations in that language. No configuration
+required — it works out of the box with any reasoning model.
+
 ```bash
 # Ollama — local reasoning, nothing leaves your machine
 # Qwen3:8b is the recommended local reasoning model
@@ -521,6 +526,57 @@ result = (
 
 All strategies except `fewshot` work without labels. `auto` excludes fewshot
 automatically for label-free datasets.
+
+## Pipeline mode
+
+Sometimes the prompt you want to optimize lives inside a multi-step agent pipeline — classify → retrieve → generate — rather than controlling a single LLM call. Traditional eval re-runs the same static traces each iteration; changes to the prompt don't affect what got classified or retrieved. Pipeline mode fixes this by re-running the full pipeline on every optimization iteration with the current candidate prompt, so each stage executes fresh.
+
+```python
+from aevyra_reflex import PromptOptimizer, AgentTrace, TraceNode
+from aevyra_verdict import LLMJudge
+from aevyra_verdict.providers import OpenRouterProvider
+
+def run_pipeline(prompt: str, ticket: str) -> AgentTrace:
+    ticket_type = classify_ticket(ticket)            # your existing code
+    policy      = retrieve_policy(ticket_type)
+    response    = generate_response(ticket, policy, prompt)  # prompt controls this node
+
+    return AgentTrace(
+        nodes=[
+            TraceNode("classify",  ticket,      ticket_type),
+            TraceNode("retrieve",  ticket_type, policy),
+            TraceNode("generate",  ticket,      response, optimize=True),
+        ],
+        ideal=expected_response,   # optional — shown in failure reports
+    )
+
+result = (
+    PromptOptimizer()
+    .set_pipeline(run_pipeline)
+    .set_inputs(tickets)          # list of raw inputs
+    .add_metric(LLMJudge(
+        judge_provider=OpenRouterProvider(model="qwen/qwen3-8b"),
+        criteria="Score the full pipeline trace: classification accuracy, policy retrieval quality, and response quality.",
+    ))
+    .run("You are a customer service agent. Answer clearly and empathetically.")
+)
+```
+
+The CLI equivalent:
+
+```bash
+aevyra-reflex optimize prompt.md \
+  --pipeline-file pipeline.py \
+  --inputs-file tickets.json \
+  --judge openrouter/qwen/qwen3-8b \
+  --judge-criteria criteria.md
+```
+
+`pipeline.py` must define a `pipeline_fn(prompt, input) -> AgentTrace` function. `tickets.json` is a JSON array of inputs.
+
+The judge evaluates the full trace text — all nodes, their inputs and outputs — so it can assess the pipeline end-to-end. Mark the node being optimized with `optimize=True` to highlight it in the trace output. No `add_provider()` call is needed; the pipeline handles its own model calls.
+
+Pipeline mode works with all strategies including `pdo`. In PDO pipeline mode, duel pairs are evaluated by running the full pipeline with each candidate prompt and comparing scores directly — no LLM judge needed for the duel itself. Pipeline mode is mutually exclusive with `set_dataset()`; use one or the other.
 
 ## CLI reference
 

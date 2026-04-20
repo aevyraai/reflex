@@ -335,10 +335,73 @@ class PromptOptimizer:
         self._dataset = None
         self._providers: list[dict[str, Any]] = []
         self._metrics: list[Any] = []
+        self._pipeline_fn: Any | None = None
+        self._raw_inputs: list[Any] | None = None
 
     def set_dataset(self, dataset: Any) -> PromptOptimizer:
         """Set the evaluation dataset (a verdict Dataset instance)."""
         self._dataset = dataset
+        return self
+
+    def set_pipeline(self, fn: Any) -> PromptOptimizer:
+        """Set the pipeline function for agentic prompt optimization.
+
+        Use this instead of ``set_dataset()`` when the prompt controls a node
+        inside a multi-step pipeline (classifier, retriever, responder, etc.)
+        rather than a single LLM call.
+
+        The function must accept ``(prompt: str, input: Any) -> AgentTrace`` and
+        will be called once per input per optimization iteration with the current
+        candidate prompt.  The optimizer scores each trace using the metrics you
+        added with ``add_metric()``.
+
+        Example::
+
+            def run_pipeline(prompt: str, ticket: str) -> AgentTrace:
+                ticket_type = classify(ticket)
+                policy      = retrieve(ticket_type)
+                response    = generate(ticket, policy, prompt)
+                return AgentTrace(
+                    nodes=[
+                        TraceNode("classify", ticket, ticket_type),
+                        TraceNode("retrieve", ticket_type, policy),
+                        TraceNode("generate", ticket, response, optimize=True),
+                    ],
+                    ideal=expected_answer,
+                )
+
+            result = (
+                PromptOptimizer()
+                .set_pipeline(run_pipeline)
+                .set_inputs(tickets)
+                .add_metric(LLMJudge(...))
+                .run(starting_prompt)
+            )
+
+        Args:
+            fn: Callable ``(prompt: str, input: Any) -> AgentTrace``.
+
+        Returns:
+            self (for chaining).
+        """
+        self._pipeline_fn = fn
+        return self
+
+    def set_inputs(self, inputs: list[Any]) -> PromptOptimizer:
+        """Set the raw inputs for pipeline mode.
+
+        Each element is passed as the second argument to the pipeline function
+        registered via ``set_pipeline()``.  This must be called when using
+        ``set_pipeline()``.
+
+        Args:
+            inputs: List of raw input values (strings, dicts, or any type your
+                    pipeline function accepts).
+
+        Returns:
+            self (for chaining).
+        """
+        self._raw_inputs = list(inputs)
         return self
 
     @staticmethod
@@ -632,15 +695,41 @@ class PromptOptimizer:
         Returns:
             OptimizationResult with baseline/final scores and full history.
         """
+        # --- Pipeline mode validation ---
+        _pipeline_mode = self._pipeline_fn is not None
+        if _pipeline_mode:
+            if self._raw_inputs is None:
+                raise ValueError(
+                    "Pipeline mode requires inputs. Call set_inputs(inputs) before run()."
+                )
+            if self._dataset is not None:
+                raise ValueError(
+                    "set_dataset() and set_pipeline() are mutually exclusive. "
+                    "Use set_pipeline() + set_inputs() for pipeline mode, or "
+                    "set_dataset() for the traditional single-LLM-call flow."
+                )
+            if not self._raw_inputs:
+                raise ValueError("set_inputs() received an empty list. Provide at least one input.")
+            # Build a synthetic dataset so split/val logic works unchanged
+            self._dataset = self._build_synthetic_dataset(self._raw_inputs)
+            logger.info(
+                f"[pipeline mode] {len(self._raw_inputs)} inputs — "
+                f"pipeline will be re-run each iteration with the current prompt candidate"
+            )
+
         if self._dataset is None:
             raise ValueError("No dataset set. Call set_dataset() first.")
-        if not self._providers:
-            raise ValueError("No providers added. Call add_provider() first.")
         if not self._metrics:
             raise ValueError("No metrics added. Call add_metric() first.")
 
+        # Providers are not required in pipeline mode — the pipeline fn handles model calls
+        if not _pipeline_mode and not self._providers:
+            raise ValueError("No providers added. Call add_provider() first.")
+
         # Fail fast for label-free datasets paired with reference-based metrics.
-        if not self._dataset.has_ideals():
+        # Skip this check in pipeline mode — ideals come from AgentTrace.ideal at eval time
+        # and the judge (LLMJudge) doesn't require a pre-populated ideal field.
+        if not _pipeline_mode and not self._dataset.has_ideals():
             needs_ideal = [
                 m.name for m in self._metrics if getattr(m, "requires_ideal", False)
             ]
@@ -719,6 +808,18 @@ class PromptOptimizer:
                 f"baseline and final evals use full test set"
             )
 
+        # Detect dataset language so the reasoning model responds in kind.
+        # We sample a few user messages from the training split (or the full
+        # dataset when no split is used) and identify the dominant script.
+        from aevyra_reflex.lang import detect_language
+        _lang_samples = [
+            c.last_user_message
+            for c in train_dataset.conversations[:20]
+            if c.last_user_message
+        ]
+        _detected_language = detect_language(_lang_samples)
+        logger.info(f"Detected dataset language: {_detected_language}")
+
         # Normalise callbacks list
         _callbacks = list(callbacks or [])
 
@@ -767,9 +868,16 @@ class PromptOptimizer:
                 f"{p['provider_name']}/{p.get('model', p.get('label', ''))}"
                 for p in self._providers
             ]
+            # In pipeline mode use the inputs file path as the stable identifier
+            # so --resume can match this run by inputs_file path.
+            _dataset_path = (
+                self.config.extra_kwargs.get("_inputs_file", "unknown")
+                if _pipeline_mode
+                else getattr(self._dataset, '_source_path', 'unknown')
+            )
             run = run_store.create_run(
                 config=config_dict,
-                dataset_path=getattr(self._dataset, '_source_path', 'unknown'),
+                dataset_path=_dataset_path,
                 prompt_path="",
                 initial_prompt=initial_prompt,
                 branched_from=branched_from,
@@ -816,6 +924,23 @@ class PromptOptimizer:
                     for s in raw_samples
                 ],
             )
+            # Older checkpoints (written before _baseline_ckpt added "samples")
+            # won't have per-sample scores. Try to recover them from baseline.json.
+            if not baseline.samples and run:
+                try:
+                    _saved_bl = run.load_baseline()
+                    if _saved_bl:
+                        baseline.samples = [
+                            SampleSnapshot(
+                                input=s.get("input", ""),
+                                response=s.get("response", ""),
+                                ideal=s.get("ideal", ""),
+                                score=s.get("score", 0.0),
+                            )
+                            for s in _saved_bl.get("samples", [])
+                        ]
+                except Exception:
+                    pass  # best-effort; significance test will just report n/a
         else:
             eval_runs = self.config.eval_runs
             eval_label = f" ({eval_runs} runs)" if eval_runs > 1 else ""
@@ -858,11 +983,7 @@ class PromptOptimizer:
                 score_trajectory=[],
                 previous_reasoning="",
                 strategy_state={},
-                baseline={
-                    "mean_score": baseline.mean_score,
-                    "scores_by_metric": baseline.scores_by_metric,
-                    "total_tokens": baseline.total_tokens,
-                },
+                baseline=_baseline_ckpt(baseline),
                 accumulated_duration_seconds=_prior_duration_seconds,
             ))
 
@@ -874,6 +995,7 @@ class PromptOptimizer:
             api_key=self.config.reasoning_api_key,
             base_url=self.config.reasoning_base_url,
             source_model=self.config.source_model,
+            response_language=_detected_language,
         )
 
         from aevyra_reflex.strategies import get_strategy
@@ -980,11 +1102,7 @@ class PromptOptimizer:
                     score_trajectory=list(_es["trajectory"]),
                     previous_reasoning=record.reasoning,
                     strategy_state=dict(_es["strategy_state"]),
-                    baseline={
-                        "mean_score": baseline.mean_score,
-                        "scores_by_metric": baseline.scores_by_metric,
-                        "total_tokens": baseline.total_tokens,
-                    },
+                    baseline=_baseline_ckpt(baseline),
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
                     best_val_iter=_es["best_val_iter"],
@@ -1126,18 +1244,18 @@ class PromptOptimizer:
                     score_trajectory=list(_es["trajectory"]),
                     previous_reasoning=(_es["iterations"][-1].reasoning if _es["iterations"] else ""),
                     strategy_state=dict(_es["strategy_state"]),
-                    baseline={
-                        "mean_score": baseline.mean_score,
-                        "scores_by_metric": baseline.scores_by_metric,
-                        "total_tokens": baseline.total_tokens,
-                    },
+                    baseline=_baseline_ckpt(baseline),
                     best_val_prompt=_es["best_val_prompt"] if val_dataset else None,
                     best_val_score=_es["best_val_score"],
                     best_val_iter=_es["best_val_iter"],
+                    global_best_val_prompt=_es["global_best_val_prompt"] if val_dataset else None,
+                    global_best_val_score=_es["global_best_val_score"],
+                    global_best_val_iter=_es["global_best_val_iter"],
                     accumulated_duration_seconds=_prior_duration_seconds + _time.monotonic() - _run_start_monotonic,
                 ))
 
         _early_stopped = False
+        _eval_fn = self._make_pipeline_eval_fn() if _pipeline_mode else None
         try:
             result = strategy.run(
                 initial_prompt=checkpoint.current_prompt if checkpoint else initial_prompt,
@@ -1148,6 +1266,7 @@ class PromptOptimizer:
                 config=self.config,
                 on_iteration=_checkpointing_callback,
                 update_strategy_state=_update_strategy_state,
+                eval_fn=_eval_fn,
                 **({"resume_state": checkpoint.strategy_state} if checkpoint and checkpoint.strategy_state else {}),
             )
         except _EarlyStop:
@@ -1162,6 +1281,46 @@ class PromptOptimizer:
                 iterations=list(_es["iterations"]),
                 converged=False,
             )
+        except Exception as _exc:
+            # Log the crash to the run directory so users can see why it failed,
+            # then re-raise so the CLI can display the traceback as normal.
+            if run:
+                import traceback as _tb
+                try:
+                    (run.run_dir / "error.txt").write_text(
+                        f"Run crashed at {__import__('datetime').datetime.now().isoformat()}\n\n"
+                        + _tb.format_exc()
+                    )
+                    run.mark_done()  # remove running sentinel so dashboard shows interrupted
+                except Exception:
+                    pass
+            raise
+
+        # --- Restore full iteration history for resumed runs ---
+        # When a run is resumed purely to execute the final test eval (e.g. after
+        # a crash between the last optimization iteration and the test eval), the
+        # strategy.run() call completes with zero new iterations this session.
+        # result.iterations is therefore empty, which produces "Iterations: 0"
+        # and a blank Train traj in the summary. Load the saved files to fix this.
+        if run and not result.iterations:
+            from aevyra_reflex.result import IterationRecord as _IR
+            _saved_iters = list(run.load_iterations())
+            if _saved_iters:
+                result.iterations = [
+                    _IR(
+                        iteration=it.iteration,
+                        system_prompt=it.system_prompt,
+                        score=it.score,
+                        scores_by_metric=getattr(it, "scores_by_metric", {}),
+                        reasoning=getattr(it, "reasoning", ""),
+                        eval_tokens=getattr(it, "eval_tokens", 0),
+                        reasoning_tokens=getattr(it, "reasoning_tokens", 0),
+                        change_summary=getattr(it, "change_summary", ""),
+                        val_score=getattr(it, "val_score", None),
+                        is_full_eval=getattr(it, "is_full_eval", False),
+                    )
+                    for it in _saved_iters
+                ]
 
         # --- Step 3: Final verification eval (on held-out test set) ---
         eval_runs = self.config.eval_runs
@@ -1330,6 +1489,230 @@ class PromptOptimizer:
                     f"(OLLAMA_NUM_PARALLEL={num}, max_workers={self.config.max_workers})"
                 )
 
+    def _build_synthetic_dataset(self, inputs: list[Any]) -> Any:
+        """Build a synthetic Verdict Dataset from raw pipeline inputs.
+
+        Each input is stored in conversation metadata under ``_pipeline_input``
+        so the eval function can retrieve it.  The conversation itself is a
+        placeholder that the pipeline eval ignores — it's here so existing split
+        and validation logic works unchanged.
+
+        Args:
+            inputs: Raw pipeline inputs (one per example).
+
+        Returns:
+            A verdict Dataset with one conversation per input.
+        """
+        from aevyra_verdict.dataset import Conversation, Dataset, Message
+
+        convos = []
+        for raw_input in inputs:
+            # Store the raw input in metadata; use a minimal placeholder message
+            # so the dataset is valid for splitting/val logic.
+            input_str = raw_input if isinstance(raw_input, str) else str(raw_input)
+            convos.append(Conversation(
+                messages=[Message(role="user", content=input_str)],
+                ideal=None,  # ideals come from AgentTrace.ideal at eval time
+                metadata={"_pipeline_input": raw_input},
+            ))
+        return Dataset(conversations=convos)
+
+    def _run_pipeline_eval(
+        self,
+        prompt: str,
+        dataset: Any,
+        *,
+        bottom_k: int = 10,
+        show_progress: bool = False,
+    ) -> tuple[float, list[dict[str, Any]], int]:
+        """Run the pipeline function for each input and score the resulting traces.
+
+        Replaces EvalRunner in pipeline mode. Calls ``self._pipeline_fn(prompt, input)``
+        for every conversation in ``dataset`` (using the ``_pipeline_input`` metadata
+        field), collects the resulting ``AgentTrace`` objects, and scores them directly
+        using ``metric.score()`` on the trace text.
+
+        Args:
+            prompt:   The current candidate system prompt.
+            dataset:  A synthetic Dataset built by ``_build_synthetic_dataset()``.
+            bottom_k: Number of worst-scoring samples to return for diagnosis.
+
+        Returns:
+            ``(mean_score, failing_samples, total_tokens)`` — the same shape that
+            the strategy-layer ``_run_eval`` function returns.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        assert self._pipeline_fn is not None, "No pipeline function set"
+
+        def _is_permanent_api_error(exc: Exception) -> bool:
+            """Return True for errors that will always fail on retry (e.g. context overflow).
+
+            400 Bad Request is the canonical permanent failure — the same payload
+            will produce the same error regardless of how many times we retry.
+            Transient errors (429, 5xx, timeouts) are handled by the OpenAI SDK's
+            built-in retry logic before the exception ever reaches us.
+            """
+            status = getattr(exc, "status_code", None)
+            if status == 400:
+                return True
+            msg = str(exc).lower()
+            return (
+                "input length" in msg
+                or "context" in msg
+                or "too long" in msg
+                or "maximum context" in msg
+                or "badrequest" in type(exc).__name__.lower()
+            )
+
+        def _run_one(convo: Any) -> tuple[float, dict[str, Any], int]:
+            raw_input = convo.metadata.get("_pipeline_input", convo.last_user_message)
+            try:
+                trace = self._pipeline_fn(prompt, raw_input)
+            except Exception as _exc:
+                _msg = str(_exc)
+                if _is_permanent_api_error(_exc):
+                    # Context-window overflow or other permanent 400 — will never
+                    # succeed on retry. Score 0.0 and continue the eval.
+                    logger.warning(
+                        "Pipeline call failed for one sample (permanent API error, "
+                        "likely context-window overflow): %s — scoring as 0.0.",
+                        _msg[:200],
+                    )
+                else:
+                    # Transient error not caught by the SDK's retry layer.
+                    # Log at ERROR level so it's visible; still score 0.0 so the
+                    # rest of the test set can complete.
+                    logger.error(
+                        "Pipeline call raised an unexpected error for one sample "
+                        "(%s): %s — scoring as 0.0.",
+                        type(_exc).__name__, _msg[:200],
+                    )
+                raw_str = str(raw_input)[:500]
+                return 0.0, {"input": raw_str, "response": f"[error: {_msg[:300]}]", "ideal": "", "score": 0.0}, 0
+
+            trace_text = trace.to_trace_text()
+            ideal = trace.ideal
+
+            # Pipeline tokens reported by the user's pipeline_fn via AgentTrace.tokens
+            pipeline_toks = getattr(trace, "tokens", 0)
+
+            # Score the trace with every metric
+            sample_scores: list[float] = []
+            for metric in self._metrics:
+                try:
+                    result = metric.score(
+                        response=trace_text,
+                        ideal=ideal or "",
+                        messages=[],
+                    )
+                    val = result.score if hasattr(result, "score") else float(result)
+                    sample_scores.append(val)
+                except Exception as _score_exc:
+                    _smsg = str(_score_exc)
+                    if _is_permanent_api_error(_score_exc):
+                        logger.warning(
+                            "Metric scoring failed for one sample (permanent API error): %s — scoring as 0.0.",
+                            _smsg[:200],
+                        )
+                    else:
+                        logger.error(
+                            "Metric scoring raised an unexpected error for one sample "
+                            "(%s): %s — scoring as 0.0.",
+                            type(_score_exc).__name__, _smsg[:200],
+                        )
+                    sample_scores.append(0.0)
+
+            mean_sample = sum(sample_scores) / len(sample_scores) if sample_scores else 0.0
+            failing_info = {
+                "input": str(raw_input)[:500],
+                "response": trace_text[:3000],  # full trace incl. answer; 1000 cuts off the answer node
+                "ideal": str(ideal or "")[:500],
+                "score": mean_sample,
+            }
+            return mean_sample, failing_info, pipeline_toks
+
+        # Suppress per-question progress traces during optimizer runs — the
+        # interleaved output from parallel workers is noise. Users can still
+        # set PIPELINE_QUIET=0 explicitly to re-enable traces for debugging.
+        if "PIPELINE_QUIET" not in os.environ:
+            os.environ["PIPELINE_QUIET"] = "1"
+
+        max_workers = self.config.max_workers or 4
+        all_scores: list[float] = []
+        all_infos: list[dict[str, Any]] = []
+        total_tokens = 0
+
+        # Snapshot judge tokens before running so we compute the delta correctly
+        _judge_before = [getattr(m, "judge_tokens_used", 0) for m in self._metrics]
+
+        # Per-sample wall-clock timeout (seconds). A hung API call (e.g. a TCP
+        # connection that never closes) will block a worker thread forever without
+        # this. 300s is generous — any real completion should finish well inside
+        # that window even for slow local models. Override with PIPELINE_SAMPLE_TIMEOUT.
+        _sample_timeout = int(os.environ.get("PIPELINE_SAMPLE_TIMEOUT", "300"))
+
+        n_inputs = len(dataset.conversations)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_run_one, convo): convo for convo in dataset.conversations}
+            if show_progress:
+                from tqdm import tqdm
+                _cm = tqdm(total=n_inputs, desc="  pipeline", unit="q",
+                           leave=False, dynamic_ncols=True)
+            else:
+                from contextlib import nullcontext
+                _cm = nullcontext()
+            with _cm as pbar:
+                for future in as_completed(futures, timeout=_sample_timeout * n_inputs):
+                    try:
+                        score, info, pipeline_toks = future.result(timeout=_sample_timeout)
+                    except TimeoutError:
+                        convo = futures[future]
+                        raw_input = convo.metadata.get("_pipeline_input", convo.last_user_message)
+                        logger.warning(
+                            "Pipeline call timed out after %ds for one sample — scoring as 0.0.",
+                            _sample_timeout,
+                        )
+                        score, info, pipeline_toks = 0.0, {
+                            "input": str(raw_input)[:500],
+                            "response": f"[timed out after {_sample_timeout}s]",
+                            "ideal": "",
+                            "score": 0.0,
+                        }, 0
+                    all_scores.append(score)
+                    all_infos.append(info)
+                    total_tokens += pipeline_toks  # tokens from inside pipeline_fn
+                    if pbar is not None:
+                        pbar.update(1)
+
+        # Add judge token delta (judge metrics accumulate across calls)
+        for m, before in zip(self._metrics, _judge_before):
+            total_tokens += getattr(m, "judge_tokens_used", 0) - before
+
+        mean_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+        sorted_infos = sorted(all_infos, key=lambda d: d["score"])
+        failing = sorted_infos[:bottom_k]
+
+        return mean_score, failing, total_tokens
+
+    def _make_pipeline_eval_fn(self) -> Any:
+        """Return a callable that strategies use instead of building their own EvalRunner.
+
+        The returned function matches the ``eval_fn`` signature expected by all
+        strategies: ``(prompt, dataset, *, bottom_k) -> (score, failing, tokens)``.
+
+        Internally it delegates to ``_run_pipeline_eval``, ignoring the synthetic
+        dataset argument (it always evaluates against ``_raw_inputs``).
+        """
+        # Build a fresh synthetic dataset from the full raw inputs — strategies
+        # may receive a training-split subset, but in pipeline mode we re-run the
+        # pipeline on the actual inputs carried in each conversation's metadata, so
+        # we just delegate through and let _run_pipeline_eval extract them.
+        def eval_fn(prompt: str, dataset: Any, *, bottom_k: int = 10) -> tuple[float, list[dict], int]:
+            return self._run_pipeline_eval(prompt, dataset, bottom_k=bottom_k)
+
+        return eval_fn
+
     def _run_eval(self, prompt: str, dataset: Any = None, n_runs: int | None = None) -> EvalSnapshot:
         """Run verdict eval with the given system prompt.
 
@@ -1346,7 +1729,35 @@ class PromptOptimizer:
         return self._run_eval_single(prompt, dataset=dataset)
 
     def _run_eval_single(self, prompt: str, dataset: Any = None) -> EvalSnapshot:
-        """Run a single verdict eval pass and return an EvalSnapshot."""
+        """Run a single verdict eval pass and return an EvalSnapshot.
+
+        In pipeline mode (when ``_pipeline_fn`` is set), delegates to
+        ``_run_pipeline_eval()`` and wraps the result as an EvalSnapshot so the
+        caller doesn't need to know which mode it's in.
+        """
+        if self._pipeline_fn is not None:
+            eval_dataset = dataset if dataset is not None else self._dataset
+            score, failing, total_tokens = self._run_pipeline_eval(
+                prompt, eval_dataset,
+                bottom_k=len(eval_dataset.conversations),
+                show_progress=True,
+            )
+            sample_snapshots = [
+                SampleSnapshot(
+                    input=s.get("input", ""),
+                    response=s.get("response", ""),
+                    ideal=s.get("ideal", ""),
+                    score=s.get("score", 0.0),
+                )
+                for s in failing
+            ]
+            return EvalSnapshot(
+                mean_score=score,
+                scores_by_metric={},
+                samples=sample_snapshots,
+                total_tokens=total_tokens,
+            )
+
         from aevyra_verdict import EvalRunner
         from aevyra_verdict.dataset import Conversation, Dataset, Message
         from aevyra_verdict.runner import RunConfig
@@ -1541,6 +1952,24 @@ class PromptOptimizer:
         # For df >= 2 this is accurate to ~1%
         p_approx = _beta_inc_approx(x, df / 2, 0.5)
         return float(p_approx), bool(p_approx < 0.05)
+
+
+def _baseline_ckpt(snap: "EvalSnapshot") -> dict[str, Any]:
+    """Serialize an EvalSnapshot for storage in checkpoint.json.
+
+    Per-sample scores are included so that a run resumed purely to execute
+    the final test eval can reconstruct ``baseline.samples`` and compute
+    significance tests correctly.
+    """
+    return {
+        "mean_score": snap.mean_score,
+        "scores_by_metric": snap.scores_by_metric,
+        "total_tokens": snap.total_tokens,
+        "samples": [
+            {"input": s.input, "response": s.response, "ideal": s.ideal, "score": s.score}
+            for s in snap.samples
+        ],
+    }
 
 
 def _beta_inc_approx(x: float, a: float, b: float) -> float:  # noqa: N802

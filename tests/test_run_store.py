@@ -496,3 +496,106 @@ class TestRunLog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGlobalBestValCheckpoint(unittest.TestCase):
+    """global_best_val fields must survive a full checkpoint save/load cycle.
+
+    Regression test for the bug where _update_strategy_state wrote a checkpoint
+    without global_best_val_* keys, causing resume to start with score=-1.0
+    and immediately overwrite the global best with the first PDO iteration's
+    (lower) val score.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.store = RunStore(root=Path(self.tmpdir) / ".reflex")
+        self.run = self.store.create_run(
+            config={"strategy": "auto"},
+            dataset_path="data.jsonl",
+            prompt_path="prompt.md",
+            initial_prompt="initial",
+        )
+
+    def test_global_best_val_survives_round_trip(self):
+        state = CheckpointState(
+            run_id=self.run.run_id,
+            initial_prompt="initial",
+            current_prompt="current",
+            completed_iterations=5,
+            best_prompt="best",
+            best_score=0.75,
+            score_trajectory=[0.5, 0.6, 0.7, 0.7, 0.75],
+            previous_reasoning="some reasoning",
+            strategy_state={},
+            baseline={"mean_score": 0.4, "scores_by_metric": {}, "total_tokens": 1000},
+            best_val_prompt="val_prompt",
+            best_val_score=0.65,
+            best_val_iter=3,
+            global_best_val_prompt="global_best_prompt",
+            global_best_val_score=0.875,
+            global_best_val_iter=2,
+        )
+        self.run.save_checkpoint(state)
+
+        loaded = self.run.load_checkpoint()
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.global_best_val_prompt, "global_best_prompt")
+        self.assertAlmostEqual(loaded.global_best_val_score, 0.875)
+        self.assertEqual(loaded.global_best_val_iter, 2)
+
+    def test_global_best_val_defaults_when_absent(self):
+        """Old checkpoints without global_best_val load with sensible defaults."""
+        state = CheckpointState(
+            run_id=self.run.run_id,
+            initial_prompt="initial",
+            current_prompt="current",
+            completed_iterations=3,
+            best_prompt="best",
+            best_score=0.6,
+            score_trajectory=[0.5, 0.55, 0.6],
+            previous_reasoning="",
+            strategy_state={},
+            baseline={"mean_score": 0.4, "scores_by_metric": {}, "total_tokens": 500},
+        )
+        self.run.save_checkpoint(state)
+
+        loaded = self.run.load_checkpoint()
+        self.assertIsNotNone(loaded)
+        # Defaults: None prompt, -1.0 score, 0 iter
+        self.assertIsNone(loaded.global_best_val_prompt)
+        self.assertEqual(loaded.global_best_val_score, -1.0)
+        self.assertEqual(loaded.global_best_val_iter, 0)
+
+    def test_global_best_val_not_overwritten_by_phase_reset(self):
+        """_update_strategy_state checkpoint saves must preserve global_best_val.
+
+        Simulates the exact bug: phase transition writes a checkpoint that
+        omits global_best_val_*, causing the next resume to forget the true
+        best-val prompt found in earlier phases.
+        """
+        # First checkpoint: full state with global_best_val from structural phase
+        state_with_global = CheckpointState(
+            run_id=self.run.run_id,
+            initial_prompt="initial",
+            current_prompt="structural_winner",
+            completed_iterations=3,
+            best_prompt="structural_winner",
+            best_score=0.57,
+            score_trajectory=[0.21, 0.57, 0.46],
+            previous_reasoning="structural done",
+            strategy_state={"phase_idx": 2, "axes_used": ["structural", "iterative"]},
+            baseline={"mean_score": 0.22, "scores_by_metric": {}, "total_tokens": 4000},
+            best_val_prompt="structural_winner",
+            best_val_score=0.65,
+            best_val_iter=3,
+            global_best_val_prompt="structural_phase2_winner",
+            global_best_val_score=0.875,
+            global_best_val_iter=2,
+        )
+        self.run.save_checkpoint(state_with_global)
+
+        # Verify it round-trips correctly
+        loaded = self.run.load_checkpoint()
+        self.assertAlmostEqual(loaded.global_best_val_score, 0.875)
+        self.assertEqual(loaded.global_best_val_prompt, "structural_phase2_winner")

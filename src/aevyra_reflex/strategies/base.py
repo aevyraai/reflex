@@ -44,17 +44,22 @@ class Strategy(ABC):
         on_iteration: Any | None = None,
         resume_state: dict | None = None,
         update_strategy_state: Any | None = None,
+        eval_fn: Any | None = None,
     ) -> OptimizationResult:
         """Run the optimization loop.
 
         Args:
             initial_prompt: The starting system prompt.
-            dataset: A verdict Dataset instance.
+            dataset: A verdict Dataset instance (may be synthetic in pipeline mode).
             providers: List of provider specs (dicts with provider_name, model, etc.).
             metrics: List of verdict Metric instances.
             agent: The Claude agent for prompt operations.
             config: OptimizerConfig with strategy parameters.
             on_iteration: Optional callback(iteration_record) for progress reporting.
+            eval_fn: Optional callable ``(prompt, dataset, *, bottom_k) -> (score, failing, tokens)``.
+                When set (pipeline mode), strategies must call this instead of constructing
+                their own EvalRunner. The function re-runs the user's pipeline with the
+                current prompt candidate and scores the resulting traces directly.
 
         Returns:
             OptimizationResult with the best prompt and full history.

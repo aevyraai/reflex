@@ -1,0 +1,122 @@
+[
+  {
+    "question": "How do I configure retry logic for failed pipeline steps?",
+    "ideal": "Use RetryPolicy(max_attempts=3, backoff_factor=2.0). Pass it to Pipeline(retry=RetryPolicy(...)). Set retry_on=[ExceptionType] to target specific errors, or omit it to retry on any exception."
+  },
+  {
+    "question": "What does on_error='dead_letter' do in pyflow?",
+    "ideal": "Records that raise an exception are routed to a DeadLetterSink for manual inspection instead of halting the pipeline. The alternative on_error='skip' drops failing records with a warning."
+  },
+  {
+    "question": "How do I test a single pipeline step without running the full pipeline?",
+    "ideal": "Use StepHarness: harness = StepHarness(my_step_fn), then call harness.run([record1, record2]). Inspect harness.output. StepHarness captures exceptions and timing per record."
+  },
+  {
+    "question": "What serialization format should I use for a production pyflow pipeline?",
+    "ideal": "msgpack is the default and fastest format, recommended for production. json is available for debugging; pickle supports arbitrary Python objects. Set via Pipeline(serialization='msgpack')."
+  },
+  {
+    "question": "How do I run a side effect like sending an alert without modifying the pipeline's records?",
+    "ideal": "Use pipeline.tap(side_effect_fn). The function receives each record but its return value is discarded; the original record passes through unchanged. Use for logging, alerting, or metrics emission."
+  },
+  {
+    "question": "How do I route records down different paths based on a condition?",
+    "ideal": "Use pipeline.branch(condition_fn, true_pipeline, false_pipeline). Records where condition_fn returns True go to true_pipeline; others go to false_pipeline. Both branches can have different sinks."
+  },
+  {
+    "question": "How do I deduplicate records by a specific field?",
+    "ideal": "Use pipeline.deduplicate(key='field_name'). The first occurrence is kept by default; set keep='last' for the most recent. For large streams, set window=10000 to limit deduplication to the last N records."
+  },
+  {
+    "question": "How do I read from a Kafka topic as a pipeline source?",
+    "ideal": "Use KafkaSource(topic='my-topic', bootstrap_servers='localhost:9092', group_id='my-group'). Set auto_offset_reset='earliest' to reprocess from the start of the topic."
+  },
+  {
+    "question": "According to the docs, how many records per second does workers=2 deliver, and how long would a 10-million-record job take at that setting?",
+    "ideal": "The docs quote ~88,000 records/sec at workers=2. 10,000,000 / 88,000 ≈ 114 seconds (~1.9 minutes)."
+  },
+  {
+    "question": "How many records can I process in 4 hours with workers=4?",
+    "ideal": "The docs quote ~170,000 records/sec at workers=4. Over 4 hours (14,400 seconds): 170,000 × 14,400 = 2,448,000,000 records."
+  },
+  {
+    "question": "At workers=8, how many records can I process in a 30-minute run?",
+    "ideal": "The docs quote ~310,000 records/sec at workers=8. Over 30 minutes (1,800 seconds): 310,000 × 1,800 = 558,000,000 records."
+  },
+  {
+    "question": "I have 5 million records and only workers=1. Roughly how many minutes will my pipeline take?",
+    "ideal": "The docs quote ~45,000 records/sec at workers=1. 5,000,000 / 45,000 ≈ 111 seconds (~1.85 minutes)."
+  },
+  {
+    "question": "If I set rate_limit=500 and run my pipeline for 2 hours, how many records will be processed?",
+    "ideal": "rate_limit=500 caps throughput at 500 records/sec. Over 2 hours (7,200 seconds): 500 × 7,200 = 3,600,000 records."
+  },
+  {
+    "question": "With batch_size=1000 and 8 million total records, how many batches will run?",
+    "ideal": "8,000,000 / 1,000 = 8,000 batches."
+  },
+  {
+    "question": "What is the throughput ratio between workers=4 and workers=1 for a CPU-bound step?",
+    "ideal": "The docs quote ~170,000 records/sec at workers=4 and ~45,000 records/sec at workers=1. Ratio: 170,000 / 45,000 ≈ 3.78×."
+  },
+  {
+    "question": "If I set every_n=250 in CheckpointSink and process 6,000 records, how many checkpoints are written?",
+    "ideal": "6,000 / 250 = 24 checkpoints written."
+  },
+  {
+    "question": "I want to process 50 million records. What workers setting should I use for a CPU-bound step, and how long will it take?",
+    "ideal": "Use workers=8 for the highest throughput: ~310,000 records/sec. 50,000,000 / 310,000 ≈ 161 seconds (~2.7 minutes)."
+  },
+  {
+    "question": "Using pyflow's default batch_size recommendation and the workers=4 throughput benchmark, how many batches per second can I expect?",
+    "ideal": "The docs recommend starting with batch_size=1000. At workers=4 (~170,000 records/sec): 170,000 / 1,000 = 170 batches/sec."
+  },
+  {
+    "question": "What is the default queue_size in pyflow, and if I have a 5-step pipeline with workers=4, what is the total queue capacity across all steps?",
+    "ideal": "The default queue_size is 1,000 per step. For 5 steps: 5 × 1,000 = 5,000 records total queue capacity. When any downstream queue fills, upstream steps pause automatically."
+  },
+  {
+    "question": "My deduplication window is set to window=10000. How many unique records can I track, and what is the maximum window size the docs recommend?",
+    "ideal": "window=10000 tracks up to 10,000 recent records. The docs do not specify a maximum window size for deduplication, but for windowed aggregation they recommend keeping windows below 100k records per key to avoid GC pressure."
+  },
+  {
+    "question": "pyflow's KafkaSource was introduced in version 0.2.0, which was released on 2024-03-10. How many days has it been available?",
+    "ideal": "Call get_date() to find today's date, then compute the number of days since 2024-03-10. State the result as a whole number of days."
+  },
+  {
+    "question": "How many days ago was pyflow's initial release (version 0.1.0, released 2024-01-15)?",
+    "ideal": "Call get_date() to find today's date, then compute the number of days since 2024-01-15. State the result."
+  },
+  {
+    "question": "pyflow 0.5.0 — which added async_step support — was released on 2025-01-08. How many days ago was that?",
+    "ideal": "Call get_date() to find today's date, then compute the number of days since 2025-01-08. State the result."
+  },
+  {
+    "question": "The current stable version of pyflow is 0.5.2, released on 2025-03-01. How many days has this version been the stable release?",
+    "ideal": "Call get_date() to find today's date, then compute the number of days since 2025-03-01. State the result."
+  },
+  {
+    "question": "Is there a built-in way to preview the first few records without running the full pipeline?",
+    "ideal": "Yes. pipeline.preview(n=10) runs the pipeline in dry-run mode, stopping after n records pass through all steps. Returns a list of records and step-level timing. Does not write to any sinks."
+  },
+  {
+    "question": "How do I limit the rate at which my pipeline consumes records?",
+    "ideal": "Use Pipeline(rate_limit=100) to cap throughput at 100 records/sec. For burst control, set rate_limit=(100, 500) as (sustained_rps, burst_rps). Rate limiting applies globally across all workers."
+  },
+  {
+    "question": "How do I log the number of records processed at each step?",
+    "ideal": "Enable Pipeline(log_step_counts=True). Counts are printed at pipeline completion and accessible via result.step_counts. For live monitoring, attach a MetricsCollector."
+  },
+  {
+    "question": "How do I output debug information for a specific step without modifying it?",
+    "ideal": "Wrap the step with debug_step(): pipeline.map(debug_step(my_fn, sample_rate=0.1)). This logs 10% of records (input, output, latency) at DEBUG level. Set sample_rate=1.0 to log every record."
+  },
+  {
+    "question": "At workers=4, I have a 6-hour overnight batch window. How many records can I process, and what throughput does the documentation quote for that configuration?",
+    "ideal": "The docs quote ~170,000 records/sec at workers=4 for a simple map step. Over 6 hours (21,600 seconds): 170,000 × 21,600 = 3,672,000,000 records."
+  },
+  {
+    "question": "Can I run the same pipeline with different worker counts without redefining it from scratch?",
+    "ideal": "Yes. Use pipeline.clone(config_overrides). Example: pipeline.clone({'workers': 8, 'batch_size': 500}) returns a new Pipeline with overridden settings and the same steps."
+  }
+]

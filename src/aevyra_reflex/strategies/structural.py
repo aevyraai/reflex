@@ -117,6 +117,7 @@ class StructuralStrategy(Strategy):
         on_iteration: Any | None = None,
         resume_state: dict | None = None,
         update_strategy_state: Any | None = None,
+        eval_fn: Any | None = None,
     ) -> OptimizationResult:
         from aevyra_reflex.strategies.iterative import _run_eval
 
@@ -203,6 +204,7 @@ class StructuralStrategy(Strategy):
                     bottom_k=s_config.bottom_k,
                     batch_size=effective_batch,
                     iteration_seed=_batch_seed + i,
+                    eval_fn=eval_fn,
                 )
                 _save_iter_state({"iter": i, "stage": "base_eval_done",
                                   "score": current_score, "eval_tokens": eval_tokens,
@@ -343,6 +345,7 @@ class StructuralStrategy(Strategy):
                     bottom_k=s_config.bottom_k,
                     batch_size=_iter_batch_size,
                     iteration_seed=_iter_seed,
+                    eval_fn=eval_fn,
                 )
                 return v_name, v_prompt, v_score, v_toks
 
@@ -418,10 +421,16 @@ class StructuralStrategy(Strategy):
             _iter_state = {}
             _save_iter_state({})
 
-        best = max(iterations, key=lambda r: r.score)
+        if iterations:
+            best = max(iterations, key=lambda r: r.score)
+            best_prompt = best.system_prompt
+            best_score = best.score
+        else:
+            best_prompt = initial_prompt
+            best_score = 0.0
         return OptimizationResult(
-            best_prompt=best.system_prompt,
-            best_score=best.score,
+            best_prompt=best_prompt,
+            best_score=best_score,
             iterations=iterations,
             converged=False,
         )

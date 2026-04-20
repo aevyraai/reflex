@@ -70,6 +70,7 @@ class FewShotStrategy(Strategy):
         on_iteration: Any | None = None,
         resume_state: dict | None = None,
         update_strategy_state: Any | None = None,
+        eval_fn: Any | None = None,
     ) -> OptimizationResult:
         if not dataset.has_ideals():
             raise ValueError(
@@ -243,6 +244,7 @@ class FewShotStrategy(Strategy):
                     bottom_k=fs_config.bottom_k,
                     batch_size=effective_batch,
                     iteration_seed=_batch_seed + i,
+                    eval_fn=eval_fn,
                 )
 
                 # Fold initial bootstrap tokens into the first iteration so they
@@ -323,10 +325,16 @@ class FewShotStrategy(Strategy):
             if on_iteration:
                 on_iteration(record)
 
-        best = max(iterations, key=lambda r: r.score)
+        if iterations:
+            best = max(iterations, key=lambda r: r.score)
+            best_prompt = best.system_prompt
+            best_score = best.score
+        else:
+            best_prompt = initial_prompt
+            best_score = 0.0
         return OptimizationResult(
-            best_prompt=best.system_prompt,
-            best_score=best.score,
+            best_prompt=best_prompt,
+            best_score=best_score,
             iterations=iterations,
             converged=False,
         )

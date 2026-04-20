@@ -50,8 +50,8 @@ def main_callback(
 
 @app.command()
 def optimize(
-    dataset: Annotated[Path, typer.Argument(help="Path to a JSONL eval dataset.")],
-    prompt: Annotated[Path, typer.Argument(help="Path to the initial system prompt (.md).")],
+    dataset: Annotated[Optional[Path], typer.Argument(help="Path to a JSONL eval dataset.")] = None,
+    prompt: Annotated[Optional[Path], typer.Argument(help="Path to the initial system prompt (.md).")] = None,
     model: Annotated[
         list[str],
         typer.Option("-m", "--model", help="Model to optimize, in 'provider/model' format."),
@@ -76,9 +76,17 @@ def optimize(
         Optional[Path],
         typer.Option("--judge-criteria", help="Path to a text file containing custom evaluation criteria for the LLM judge. Only used with --judge."),
     ] = None,
+    pipeline_file: Annotated[
+        Optional[Path],
+        typer.Option("--pipeline-file", help="Path to a Python file defining a pipeline_fn(prompt: str, input: Any) -> AgentTrace function. When provided, pipeline mode is used instead of dataset mode."),
+    ] = None,
+    inputs_file: Annotated[
+        Optional[Path],
+        typer.Option("--inputs-file", help="Path to a JSON file containing a list of inputs ([...]) or a JSONL file (one value per line). Required when --pipeline-file is given."),
+    ] = None,
     strategy: Annotated[
         str,
-        typer.Option("-s", "--strategy", help="Strategy: 'auto' (default), 'iterative', 'pdo', 'fewshot', or 'structural'."),
+        typer.Option("-s", "--strategy", help="Strategy: 'auto' (default), 'iterative', 'structural', or 'pdo'."),
     ] = "auto",
     reasoning_model: Annotated[
         Optional[str],
@@ -286,30 +294,56 @@ def optimize(
 
     from aevyra_reflex.optimizer import OptimizerConfig, PromptOptimizer, _resolve_provider
 
+    # In pipeline mode there is no dataset positional, so Typer fills `dataset`
+    # with whatever comes after the flags — which is actually the prompt file.
+    # Detect this and swap so users don't have to pass a dummy dataset argument.
+    if pipeline_file is not None and prompt is None and dataset is not None:
+        prompt = dataset
+        dataset = None
+
     # Validate inputs
-    if not dataset.exists():
-        typer.echo(f"Error: dataset file not found: {dataset}", err=True)
+    if prompt is None:
+        typer.echo("Error: missing argument 'PROMPT'. Pass the path to your prompt .md file.", err=True)
         raise typer.Exit(code=1)
     if not prompt.exists():
         typer.echo(f"Error: prompt file not found: {prompt}", err=True)
         raise typer.Exit(code=1)
-    if not model:
-        typer.echo("Error: at least one --model is required.", err=True)
+
+    # Pipeline mode mutual exclusion
+    is_pipeline_mode = pipeline_file is not None
+    if is_pipeline_mode and dataset is not None:
+        typer.echo("Error: --pipeline-file and dataset are mutually exclusive.", err=True)
         raise typer.Exit(code=1)
+    if is_pipeline_mode and inputs_file is None:
+        typer.echo("Error: --inputs-file is required with --pipeline-file.", err=True)
+        raise typer.Exit(code=1)
+    if not is_pipeline_mode and dataset is None:
+        typer.echo("Error: dataset argument or --pipeline-file is required.", err=True)
+        raise typer.Exit(code=1)
+    if not is_pipeline_mode and not model:
+        typer.echo("Error: at least one --model is required (or use --pipeline-file for pipeline mode).", err=True)
+        raise typer.Exit(code=1)
+
+    if not pipeline_file and not dataset.exists():
+        typer.echo(f"Error: dataset file not found: {dataset}", err=True)
+        raise typer.Exit(code=1)
+
     if verdict_results and target:
         typer.echo("Error: use --verdict-results or --target, not both.", err=True)
         raise typer.Exit(code=1)
 
-    # Load — auto-detect CSV vs JSONL from extension
-    from aevyra_verdict import Dataset
-    if dataset.suffix.lower() == ".csv":
-        ds = Dataset.from_csv(
-            str(dataset),
-            input_field=input_field or "input",
-            output_field=output_field if output_field is not None else "ideal",
-        )
-    else:
-        ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
+    # Load dataset (standard mode only)
+    ds = None
+    if not is_pipeline_mode:
+        from aevyra_verdict import Dataset
+        if dataset.suffix.lower() == ".csv":
+            ds = Dataset.from_csv(
+                str(dataset),
+                input_field=input_field or "input",
+                output_field=output_field if output_field is not None else "ideal",
+            )
+        else:
+            ds = Dataset.from_jsonl(str(dataset), input_field=input_field, output_field=output_field)
     initial_prompt = prompt.read_text().strip()
 
     # Resolve the score threshold.
@@ -409,14 +443,43 @@ def optimize(
         full_eval_steps=full_eval_steps,
     )
     optimizer = PromptOptimizer(config=config)
-    optimizer.set_dataset(ds)
 
-    for m in model:
-        parts = m.split("/", 1)
-        if len(parts) != 2:
-            typer.echo(f"Error: model must be in 'provider/model' format, got: {m}", err=True)
+    raw_inputs = None
+    if is_pipeline_mode:
+        # Dynamically import the pipeline file
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_user_pipeline", pipeline_file)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        if not hasattr(mod, "pipeline_fn"):
+            typer.echo(f"Error: {pipeline_file} must define a 'pipeline_fn(prompt, input) -> AgentTrace' function.", err=True)
             raise typer.Exit(code=1)
-        optimizer.add_provider(parts[0], parts[1])
+        pipeline_fn_callable = mod.pipeline_fn
+
+        # Load inputs from the inputs file
+        import json as _json
+        _inputs_text = inputs_file.read_text()
+        if inputs_file.suffix.lower() == ".jsonl":
+            raw_inputs = [_json.loads(line) for line in _inputs_text.splitlines() if line.strip()]
+        else:
+            raw_inputs = _json.loads(_inputs_text)
+        if not isinstance(raw_inputs, list):
+            typer.echo("Error: inputs file must contain a JSON array.", err=True)
+            raise typer.Exit(code=1)
+        optimizer.set_pipeline(pipeline_fn_callable).set_inputs(raw_inputs)
+        # Store paths in extra_kwargs so the run config has a stable identifier
+        # for --resume auto-find (stored as dataset_path in the run's config.json).
+        config.extra_kwargs["_pipeline_file"] = str(pipeline_file.resolve())
+        config.extra_kwargs["_inputs_file"] = str(inputs_file.resolve())
+    else:
+        optimizer.set_dataset(ds)
+
+        for m in model:
+            parts = m.split("/", 1)
+            if len(parts) != 2:
+                typer.echo(f"Error: model must be in 'provider/model' format, got: {m}", err=True)
+                raise typer.Exit(code=1)
+            optimizer.add_provider(parts[0], parts[1])
 
     _add_metrics(optimizer, metric, judge, ds, judge_criteria=judge_criteria)
 
@@ -468,24 +531,27 @@ def optimize(
     typer.echo("=" * 52)
     typer.echo("  aevyra-reflex")
     typer.echo("=" * 52)
-    n_total = len(ds.conversations)
-    if val_split > 0.0 and 0.0 < train_split < 1.0:
-        n_test = max(1, n_total - round(n_total * train_split))
-        n_val = max(1, round(n_total * val_split))
-        n_train = max(1, n_total - n_test - n_val)
-        split_display = (
-            f"{n_train} train / {n_val} val / {n_test} test "
-            f"({n_train/n_total:.0%} / {n_val/n_total:.0%} / {n_test/n_total:.0%})"
-        )
-    elif 0.0 < train_split < 1.0:
-        n_train = max(1, round(n_total * train_split))
-        n_test = max(1, n_total - n_train)
-        split_display = f"{n_train} train / {n_test} test ({train_split:.0%} / {1 - train_split:.0%})"
+    if is_pipeline_mode:
+        typer.echo(f"  Pipeline   : {pipeline_file.name} ({len(raw_inputs)} inputs)")
     else:
-        split_display = "none (full dataset)"
-    typer.echo(f"  Dataset    : {dataset.name} ({n_total} samples)")
-    typer.echo(f"  Split      : {split_display}")
-    typer.echo(f"  Model(s)   : {', '.join(model)}")
+        n_total = len(ds.conversations)
+        if val_split > 0.0 and 0.0 < train_split < 1.0:
+            n_test = max(1, n_total - round(n_total * train_split))
+            n_val = max(1, round(n_total * val_split))
+            n_train = max(1, n_total - n_test - n_val)
+            split_display = (
+                f"{n_train} train / {n_val} val / {n_test} test "
+                f"({n_train/n_total:.0%} / {n_val/n_total:.0%} / {n_test/n_total:.0%})"
+            )
+        elif 0.0 < train_split < 1.0:
+            n_train = max(1, round(n_total * train_split))
+            n_test = max(1, n_total - n_train)
+            split_display = f"{n_train} train / {n_test} test ({train_split:.0%} / {1 - train_split:.0%})"
+        else:
+            split_display = "none (full dataset)"
+        typer.echo(f"  Dataset    : {dataset.name} ({n_total} samples)")
+        typer.echo(f"  Split      : {split_display}")
+        typer.echo(f"  Model(s)   : {', '.join(model)}")
     typer.echo(f"  Strategy   : {strategy}")
     typer.echo(f"  Metrics    : {metric_display}")
     reasoning_display = reasoning_model or "claude-sonnet-4-20250514"
@@ -539,7 +605,7 @@ def optimize(
         typer.echo(f"Resuming run {resume_run.run_id}...")
     elif resume:
         resume_run = store.find_incomplete_run(
-            dataset_path=str(dataset),
+            dataset_path=str(inputs_file.resolve()) if is_pipeline_mode else str(dataset),
         )
         if resume_run is None:
             typer.echo("No interrupted run found. Starting a new run.")

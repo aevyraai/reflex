@@ -47,6 +47,21 @@ prompt works well on the target model.
 """
 
 # ---------------------------------------------------------------------------
+# Language instruction (prepended when a non-default response language is set)
+# ---------------------------------------------------------------------------
+
+LANGUAGE_INSTRUCTION = """\
+## Language requirement
+The dataset you are optimizing for is in **{language}**. \
+You must write ALL revised system prompts and ALL explanations of your changes \
+in **{language}** only. Do not switch to any other language at any point in \
+your response, including in code comments, examples, or inline notes.
+
+---
+
+"""
+
+# ---------------------------------------------------------------------------
 # Shared
 # ---------------------------------------------------------------------------
 

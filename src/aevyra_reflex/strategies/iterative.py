@@ -49,6 +49,7 @@ class IterativeStrategy(Strategy):
         on_iteration: Any | None = None,
         resume_state: dict | None = None,
         update_strategy_state: Any | None = None,
+        eval_fn: Any | None = None,
     ) -> OptimizationResult:
         from aevyra_verdict.runner import RunConfig
 
@@ -127,6 +128,7 @@ class IterativeStrategy(Strategy):
                     bottom_k=config.extra_kwargs.get("bottom_k", 10),
                     batch_size=effective_batch,
                     iteration_seed=_batch_seed + i,
+                    eval_fn=eval_fn,
                 )
                 _save_iter_state({"iter": i, "stage": "eval_done",
                                   "score": score, "eval_tokens": eval_tokens,
@@ -209,10 +211,16 @@ class IterativeStrategy(Strategy):
             _save_iter_state({}, iters_done_override=i + 1)
 
         # Exhausted max_iterations
-        best = max(iterations, key=lambda r: r.score)
+        if iterations:
+            best = max(iterations, key=lambda r: r.score)
+            best_prompt = best.system_prompt
+            best_score = best.score
+        else:
+            best_prompt = initial_prompt
+            best_score = 0.0
         return OptimizationResult(
-            best_prompt=best.system_prompt,
-            best_score=best.score,
+            best_prompt=best_prompt,
+            best_score=best_score,
             iterations=iterations,
             converged=False,
         )
@@ -228,6 +236,7 @@ def _run_eval(
     bottom_k: int = 10,
     batch_size: int = 0,
     iteration_seed: int = 0,
+    eval_fn: Any | None = None,
 ) -> tuple[float, list[dict[str, Any]], int]:
     """Run a verdict eval with the given system prompt and return (mean_score, failing_samples, total_tokens).
 
@@ -239,7 +248,16 @@ def _run_eval(
             before running the eval (mini-batch mode). 0 = use the full dataset.
         iteration_seed: Random seed for the mini-batch sample. Pass a different
             value each iteration to ensure each batch is distinct.
+        eval_fn: When set (pipeline mode), calls ``eval_fn(prompt, dataset, bottom_k=k)``
+            instead of constructing an EvalRunner. The function re-runs the user's
+            pipeline with the current prompt and scores the resulting traces directly.
     """
+    # Pipeline mode: delegate entirely to the eval_fn provided by the optimizer.
+    # This bypasses EvalRunner — the pipeline function generates completions,
+    # and the judge metrics are called directly on the resulting traces.
+    if eval_fn is not None:
+        return eval_fn(prompt, dataset, bottom_k=bottom_k)
+
     import random as _random
 
     from aevyra_verdict import Dataset, EvalRunner
