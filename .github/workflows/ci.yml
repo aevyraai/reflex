@@ -44,16 +44,9 @@ jobs:
 
       - name: Check JS syntax
         run: |
-          python3 -c "
-import re, sys, pathlib
-html = pathlib.Path('src/aevyra_reflex/dashboard/app.html').read_text()
-match = re.search(r'<script>(.*?)</script>', html, re.DOTALL)
-if not match:
-    print('ERROR: No <script> block found in app.html')
-    sys.exit(1)
-pathlib.Path('/tmp/dashboard.js').write_text(match.group(1))
-print(f'Extracted {len(match.group(1))} chars of JS from app.html')
-"
+          awk '/<script>/{p=1;next} /<\/script>/{p=0} p' \
+            src/aevyra_reflex/dashboard/app.html > /tmp/dashboard.js
+          test -s /tmp/dashboard.js || (echo "ERROR: No <script> block found in app.html" && exit 1)
           node --check /tmp/dashboard.js
           echo "Dashboard JS syntax OK"
 
