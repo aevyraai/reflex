@@ -3,19 +3,60 @@ title: "Tutorial: optimizing a tool-calling developer assistant"
 description: Teach an agent to reliably call search_docs, calculate, and get_date before answering — a complete pipeline-mode walkthrough with real run logs.
 ---
 
-This tutorial walks through a real reflex run on an agent that cannot be
-optimized from a static dataset. The task is a developer assistant for the
-pyflow data-pipeline library: it must retrieve documentation, run arithmetic,
-and check today's date before answering — and the judge can tell when it skips
-these steps and answers from memory instead.
+## Why standard prompt optimization fails for agentic systems
 
-That grounded evaluation is only possible because reflex re-runs the full
-pipeline on every optimization iteration. When the prompt changes, the agent's
-tool-calling behaviour changes with it. A static Q&A dataset would miss this
-entirely: it would score the final answer without knowing which tools were
-called or whether the numbers came from a calculation or from a guess.
+Standard prompt optimization has a clean abstraction: a dataset of (input,
+ideal output) pairs, a model, a judge that compares outputs to ideals, and an
+optimization loop that rewrites the prompt until scores improve. This works well
+when the prompt is the only thing between the input and the output.
 
-## The problem
+An agentic system breaks that abstraction immediately. The prompt doesn't
+produce the output directly — it shapes how the agent behaves across a chain of
+decisions. Which tools it decides to call. Whether it verifies arithmetic or
+estimates from memory. How it incorporates what the tools returned before
+composing its answer. The final output is downstream of all of those decisions,
+and most of them are invisible when you score a string against an ideal string.
+
+The failure mode is predictable. A model with broad domain knowledge can produce
+answers that look correct — right ballpark numbers, plausible API details —
+without calling a single tool. A static (input, output) dataset scores those
+answers a 4 or 5. A judge watching the full execution trace scores them a 2:
+correct answer, grounding bypassed. The two scores say completely different
+things about whether the system is working correctly. Optimizing against the
+first signal points the prompt in the wrong direction.
+
+## How reflex handles this: pipeline mode
+
+Pipeline mode changes what gets evaluated. Instead of scoring a string against
+an ideal, reflex re-runs your entire agent pipeline on every candidate prompt.
+When the prompt changes, the agent's tool-calling behaviour changes with it —
+and the score reflects that change in behaviour, not just in output text.
+
+You write a `pipeline_fn` that runs your agent and returns an `AgentTrace`: a
+structured record of every step the agent took, which tools it called, what they
+returned, and what the agent finally said. Reflex calls that function on every
+candidate prompt, passes the full trace to the judge, and uses the score to
+drive the optimization loop.
+
+Because the judge sees the full trace, the rubric can enforce grounding rules
+that a static eval cannot express: "if `calculate` was available and the
+question involves arithmetic, a score of 5 requires that `calculate` was
+called." When the optimizer diagnoses a low-scoring sample, it has the complete
+picture — which tools were called, what they returned, where the final answer
+diverged — and can write prompt revisions that target the actual failure mode
+rather than surface-level output differences.
+
+Two constraints follow from this architecture. First, temperature must be zero
+inside `pipeline_fn`. Reflex compares prompt variants by running the same inputs
+multiple times; sampling noise would make comparisons unreliable. Second, the
+judge rubric must explicitly penalise bypassed tools — without that rule, a
+model that estimates correctly scores the same as one that calls the tool, and
+the optimizer has no signal to improve grounding.
+
+The rest of this tutorial walks through a real run that shows both of these in
+action.
+
+## The task
 
 A developer assistant needs to answer questions about pyflow accurately. Some
 questions are pure doc lookups. Others require arithmetic (throughput estimates,
@@ -68,6 +109,7 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
         response = client.chat.completions.create(
             model=MODEL, messages=messages,
             tools=TOOL_SCHEMAS, tool_choice="auto",
+            temperature=0.0,   # ← required: see note below
         )
         msg = response.choices[0].message
 
@@ -95,6 +137,18 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
                   output=final_answer, optimize=True),
     ])
 ```
+
+:::warning Set `temperature=0` in your pipeline function
+Reflex compares prompt variants by running `pipeline_fn` on the same inputs and
+comparing scores. If temperature is left at the provider default (typically
+0.7–1.0), the **same prompt will score differently on different runs** due to
+sampling noise — a variant may appear to improve or hurt purely by chance.
+
+Always set `temperature=0.0` on every LLM call inside `pipeline_fn`. This makes
+each eval deterministic so variant comparisons reflect real prompt differences,
+not random variation. The smoke test also benefits: you get the same output
+every time you run it, making it easier to confirm a fix worked.
+:::
 
 The `tools_called` and `tool_results` nodes are marked `optimize=False` —
 reflex passes them to the judge for grounding evaluation but does not try to
@@ -178,10 +232,11 @@ aevyra-reflex optimize \
   --pipeline-file examples/dev_assistant/pipeline.py \
   --inputs-file   examples/dev_assistant/questions.json \
   examples/dev_assistant/prompt.md \
-  --judge openrouter/qwen/qwen3-8b \
+  --reasoning-model openrouter/qwen/qwen3-30b-a3b \
+  --judge openrouter/qwen/qwen3-30b-a3b \
   --judge-criteria examples/dev_assistant/judge.md \
   --strategy auto \
-  --max-workers 6 \
+  --max-workers 4 \
   -o examples/dev_assistant/best_prompt.md
 ```
 
@@ -189,236 +244,309 @@ Note there is no `-m` / `--model` flag. In pipeline mode the model is baked
 into `pipeline_fn` — reflex calls your function and receives an `AgentTrace`
 back. The judge model (`--judge`) is separate and scores the trace.
 
+Reflex prints the run header before doing anything:
+
+```
+====================================================
+  aevyra-reflex
+====================================================
+  Pipeline   : pipeline.py (30 inputs)
+  Strategy   : auto
+  Metrics    : LLM judge
+  Reasoning  : openrouter/qwen/qwen3-30b-a3b
+  Target     : 0.8500
+  Workers    : 4
+  Val split  : 20% of total (  patience=3)
+====================================================
+```
+
+Then it splits the 30 inputs, detects the language, and starts the baseline:
+
+```
+[pipeline mode] 30 inputs — pipeline will be re-run each iteration with the current prompt candidate
+Dataset split (3-way): 14 train / 6 val / 10 test — val set used to detect overfitting; test set for baseline and final eval
+Detected dataset language: English
+[run 101][auto] Running baseline eval on TEST SET (10 held-out samples)...
+[run 101][auto] Baseline TEST SET score: 0.6500
+```
+
 ## What happened: phase by phase
 
-The `auto` strategy ran 3 phases over 75 minutes.
+The `auto` strategy ran 3 phases over 53 minutes.
 
-### Baseline: 0.3500
+### Baseline: 0.6500
 
-The starting prompt scores 0.3500. On a 1–5 rubric normalised to 0–1, that
-means the model is consistently producing 2-rated output: it answers questions
-from training knowledge, it estimates arithmetic rather than calling
-`calculate`, and it never calls `get_date`. The answers are often plausible
-but none of them are grounded.
+The starting prompt scores 0.6500. That is already above the midpoint — the
+model knows something about the task. What it doesn't do reliably is use tools:
+it answers doc-lookup questions from training knowledge, estimates arithmetic
+rather than calling `calculate`, and sometimes calls tools but then ignores
+what they returned when composing its answer. The judge catches all three of
+those and scores them a 2 or 3.
 
-A representative baseline turn for the question *"how many records can I
-process in 4 hours at workers=4?"*:
+At 0.65 there is still a 0.20 gap to close to reach the 0.85 target.
 
-```
-tools_called: (no tools called)
-tool_results: (no tool results)
-answer: "At workers=4, pyflow can typically process around 1–2 billion records
-         in a 4-hour window, though this depends heavily on your step complexity
-         and hardware."
-```
+### Phase 1 — structural (18 min 56 s)
 
-Technically the estimate is in the right ballpark — but it is a guess. The
-judge scores it 2.
-
-### Phase 1 — structural (18 minutes)
-
-The reasoning model identified this as a tool-grounding problem: the prompt
-says nothing about when or how to use tools. It generated 4 structural variants
-and tested each on all 13 training questions:
-
-| Variant | Score | Delta |
-|---|---|---|
-| vague_role | 0.3500 | +0.0000 — baseline, no change |
-| mention_tools | 0.4615 | +0.1115 — mentioning tools helped slightly |
-| tool_guidelines | 0.6538 | +0.3038 — clear rules moved the needle |
-| **grounding_mandate** | **0.7692** | **+0.4192 — explicit always-call rules** |
-
-The `grounding_mandate` variant added explicit rules: call `search_docs` for
-any pyflow question, call `calculate` for any numerical question, call
-`get_date` for any date question, and ground the answer in tool results. This
-alone nearly doubled the score.
-
-The structural phase ran a second iteration and converged at **0.7692**.
-
-### Phase 2 — iterative (42 minutes)
-
-The reasoning model identified three remaining failure patterns from the
-bottom-scoring training examples and proposed targeted fixes:
-
-**Iter 1 → 2** (+0.054): Some questions involving throughput benchmarks caused
-the model to call `search_docs` but then answer without calling `calculate` —
-it would read "170,000 records/sec" from the docs and multiply in its head.
-Fix: added an explicit rule that `calculate` must be called for any arithmetic,
-even when the inputs are already known.
+The reasoning model diagnosed this as a structural problem: the two-word prompt
+gives the model no guidance on output format, when to reach for a tool, or how
+to incorporate tool results. It generated 4 structural variants and evaluated
+each on all 14 training examples in parallel:
 
 ```
-Before: "At workers=4 the docs show 170k rps. Over 4 hours that's roughly
-         2.4 billion records."
-After:  [search_docs → "workers=4: ~170,000 records/sec"]
-        [calculate("170_000 * 14_400") → "2448000000"]
-        "The docs quote ~170,000 records/sec at workers=4. Over 4 hours
-         (14,400 seconds): 170,000 × 14,400 = 2,448,000,000 records."
+[structural][iter 1/3] Score: 0.5536  target: 0.8500  failing samples: 10
+[structural][iter 1/3] Generating 4 variants (4 workers)...
+[structural][iter 1/3]   section_reorder:     0.4643  (Δ-0.0893 — ✗ hurt)
+[structural][iter 1/3]   markdown_structure:  0.7143  (Δ+0.1607 — ✓ helped)
+[structural][iter 1/3]   agent_guided:        0.5893  (Δ+0.0357 — ✓ helped)
+[structural][iter 1/3]   minimal_flat:        0.4464  (Δ-0.1071 — ✗ hurt)
+[structural][iter 1/3] Winner: markdown_structure (0.5536 → 0.7143, Δ+0.1607)
 ```
 
-**Iter 2 → 3** (+0.038): Date questions were still being answered with
-approximate language ("a bit over a year ago") rather than calling `get_date`.
-Fix: added an example showing the expected two-step pattern — call `get_date`,
-then call `calculate` with the date difference.
+`markdown_structure` — which added section headers, a tool-decision checklist,
+and explicit formatting rules — jumped the score by **+0.16 in a single step**.
+Flattening to a minimal paragraph (`minimal_flat`) hurt; reordering sections
+(`section_reorder`) also hurt. The model needed structure, not simplification.
 
-**Iter 3 → 4** (+0.015): Minor edge case where `search_docs` returned "No
-relevant documentation found" but the model still fabricated an API detail.
-Fix: added an explicit "say so if docs don't cover it" rule.
+Note: the first iteration score (0.5536) is lower than the baseline (0.65).
+This is expected — the baseline was measured on the held-out test set, while
+each optimization iteration evaluates on the training split. The two pools of
+examples have slightly different difficulty distributions; training scores and
+test scores are not directly comparable.
 
-The iterative phase converged at **0.8333** (train), val=**0.8095**.
-
-### Phase 3 — fewshot (15 minutes)
-
-The reasoning model recommended two few-shot examples to lock in the expected
-pattern for multi-tool questions:
-
-| Fewshot iteration | Val score |
-|---|---|
-| 1 | 0.8333 |
-| 2 | 0.8571 |
-
-Early stopping triggered at **val=0.8571** (iteration 2 exceeded the patience
-threshold).
-
-### Final test set eval
-
-The test eval uses the **best-val prompt** (fewshot iteration 2, val=0.8571)
-rather than the final training prompt — this guards against overfitting.
+The structural phase ran two more iterations. Iteration 2 found no variant
+better than the current prompt. Iteration 3 found one more gain:
 
 ```
-Baseline TEST SET score : 0.3500
-Final TEST SET score    : 0.8250
-Improvement             : +0.4750 (+135.7%)
-Significance            : p=0.0000  ✓ (α=0.05, paired test)
+[structural][iter 3/3] Score: 0.7143  target: 0.8500  failing samples: 10
+[structural][iter 3/3]   agent_guided:    0.6429  (Δ-0.0714 — ✗ hurt)
+[structural][iter 3/3]   input_anchored:  0.7321  (Δ+0.0179 — ✓ helped)
+[structural][iter 3/3]   role_task_format: 0.5536 (Δ-0.1607 — ✗ hurt)
+[structural][iter 3/3] Winner: input_anchored (0.7143 → 0.7321, Δ+0.0179)
+  Phase 1 (structural) done: score=0.7143, converged=False, duration=18m 56s
+```
+
+`input_anchored` — which opens with the user's question rather than a general
+role statement — added a small but consistent gain. The phase ended at
+**0.7143** on train. The val score over these three iterations was
+0.5417 → 0.5833 → 0.6250, steadily climbing.
+
+### Phase 2 — iterative (10 min 21 s)
+
+The reasoning model assessed the structural result and chose iterative next:
+
+> *"The structural optimization improved clarity but may not have addressed
+> specific instruction ambiguities. Iterative refinement can target persistent
+> issues like tool-use logic, calculation formatting, or edge case handling
+> observed in sample outputs."*
+
+Each iteration diagnosed the worst-scoring training samples, identified the
+common failure pattern, and proposed a targeted revision:
+
+**Iteration 4 — first diagnosis** (train 0.6429, val 0.7917):
+
+The agent found that the model was still occasionally using assumed values
+rather than tool results for calculations. Fix: added explicit instructions to
+prioritise tool-derived data and structure multi-step calculations clearly.
+Prompt went from the structural winner to a concise **856-character** revision.
+
+The val score jumped to **0.7917** — already well ahead of where structural
+left it.
+
+**Iteration 5 — second refinement** (train 0.6429, val **0.9583**):
+
+The agent tightened the data-verification rules further, adding explicit
+calculation structuring requirements to prevent assumption-based errors. Prompt
+grew to **2,277 characters**.
+
+```
+[iterative][iter 2/4] Score: 0.6429  val=0.9583
+[iterative][iter 2/4] Change: Enhanced data verification steps and explicit
+  calculation structuring to enforce strict tool-data reliance and prevent
+  assumption-based errors.
+```
+
+Train score held at 0.6429 — the training examples are hard and the model is
+still getting several wrong. But the val score hit **0.9583**, the highest it
+reached across the entire run. This is the prompt reflex will select for the
+final test eval.
+
+**Iteration 6** (train 0.5714, val 0.8750):
+
+The prompt grew to **3,251 characters** as the agent kept adding constraints.
+Train score dropped. This is over-constrained territory: the model started
+following the prompt's formatting rules so literally that it lost flexibility
+on harder inputs.
+
+**Iteration 7** (train 0.5357, val 0.8333):
+
+The agent noticed the rewrite log and reversed course, compressing back to
+**501 characters** — the most concise prompt of the run. Train dropped further.
+The val score also fell to 0.8333 as the compression removed something
+important.
+
+```
+  Phase 2 (iterative) done: score=0.6429, converged=False, duration=10m 21s
+```
+
+The iterative phase's best train score was 0.6429, but that is not the end of
+the story. The val score told a different story: it peaked at **0.9583** at
+iteration 5, while train scores kept fluctuating around 0.57–0.64. The val
+checkpoint captured the right moment.
+
+### Phase 3 — PDO (15 min 3 s)
+
+After two phases of diminishing returns the reasoning model switched to PDO
+(tournament-style search):
+
+> *"The prompt has reached diminishing returns with structural and iterative
+> changes, suggesting it's close to optimal. PDO is best for final fine-tuning
+> when the prompt is nearly correct but needs subtle adjustments."*
+
+PDO generated a pool of 6 candidate prompts from the structural winner and ran
+3 rounds of duels:
+
+```
+Generating initial pool of 6 prompts (4 workers in parallel)
+Initialized pool with 6 prompts in 29.9s
+
+Round 1/3 (pool size: 6)
+  Running 3 duels (3 workers in parallel)
+    Duel: prompt 5 beat prompt 1
+    Duel: prompt 0 beat prompt 2
+    Duel: prompt 1 beat prompt 5
+  Champion win rate: 1.000  eval score: 0.6250
+
+Round 2/3 (pool size: 6)
+  Running 3 duels (3 workers in parallel)
+    Duel: prompt 4 beat prompt 0
+    Duel: prompt 5 beat prompt 3
+    Duel: prompt 4 beat prompt 1
+  Ranking weights: copeland=25%, borda=25%, elo=25%, avg_winrate=25%
+  Champion win rate: 1.000  eval score: 0.6964
+
+Round 3/3 (pool size: 6)
+  Running 3 duels (3 workers in parallel)
+    Duel: prompt 3 beat prompt 2
+    Duel: prompt 4 beat prompt 2
+    Duel: prompt 1 beat prompt 2
+  Ranking weights: copeland=25%, borda=25%, elo=25%, avg_winrate=25%
+  Champion win rate: 1.000  eval score: 0.7679
+
+  Phase 3 (pdo) done: score=0.7679, converged=False, duration=15m 3s
+```
+
+PDO's champion scored 0.7679 on train — the highest training score of the run.
+The ranking weights stayed balanced (25% each) because with only 3 rounds there
+wasn't enough data to distinguish between Copeland, Borda, Elo, and average
+win-rate. Given more budget, the adaptive weights would have shifted toward
+whichever method most consistently predicted the right champion.
+
+### Final test set eval: best-val selection
+
+At the end of all phases, reflex has two candidate prompts:
+
+| Prompt | Source | Train | Val |
+|---|---|---|---|
+| PDO champion | Phase 3 | 0.7679 | 0.5000 |
+| **Val checkpoint** | **Phase 2, iter 5** | **0.6429** | **0.9583** |
+
+The PDO champion scores better on training examples. But its val score is
+0.5000 — it has overfit to the specific examples it was tournament-selected on.
+The iteration-5 iterative prompt scores lower on train but holds at **0.9583**
+on the unseen val examples. Reflex always uses the best-val prompt for the
+final test eval:
+
+```
+[run 101][auto] Running TEST SET eval on best-val prompt
+  (iter 5: train=0.6429, val=0.9583) — 10 held-out samples...
+
+[run 101][auto] TEST SET score: 0.7250  (baseline: 0.6500  delta: +0.0750)
+```
+
+```
+====================================================
+  OPTIMIZATION RESULTS
+====================================================
+  Train/val/test   : 14 / 6 / 10 samples
+  Baseline score   : 0.6500  (on 10-sample test set)
+  Final score      : 0.7250  (on 10-sample test set)
+  Improvement      : +0.0750 (+11.5%)
+  Iterations       : 10
+  Converged        : False
+  Eval tokens      : 880.9K
+  Reasoning tokens : 150.5K
+  Duration         : 52m 53s
+----------------------------------------------------
+  Train traj : 0.554 → 0.643 → 0.714 → 0.643 → 0.643 → 0.571 → 0.536 → 0.625 → 0.696 → 0.768
+  Val traj   : 0.542 → 0.583 → 0.625 → 0.792 → 0.958 → 0.875 → 0.833 → 0.667 → 0.625 → 0.500
+====================================================
 ```
 
 ## Before and after
 
-The same question, the same agent, two different prompts.
+**Before:** `You are a helpful assistant. Answer the user's question.`
 
-**Question:** *"According to the docs, how many records per second does
-workers=2 deliver, and how long would a 10-million-record job take?"*
+**After** (the iteration-5 best-val prompt):
 
-**Before** (score: 0.400 / 5):
-```
-tools_called: (no tools called)
-tool_results: (no tool results)
+```text
+# System Prompt
 
-"With workers=2, pyflow typically achieves somewhere between 60,000 and
- 100,000 records per second depending on step complexity. For 10 million
- records you're looking at roughly 2–3 minutes."
-```
+## Core Instructions
+- Be a helpful assistant.
+- Answer the user's question directly.
 
-The model knew the approximate range from training data. But it did not call
-`search_docs` (which would have returned the exact figure of 88,000 records/sec)
-and did not call `calculate` (which would have produced 113.6 seconds). The
-judge scores this 2 — technically reasonable, but not grounded.
+## Response Phases
+1. Check if the question requires a tool.
+2. Use the tool if applicable.
+3. Generate the answer otherwise.
 
-**After** (score: 1.000 / 5):
-```
-tools_called:
-  [search_docs] query: "workers throughput benchmark records per second"
-  [calculate]   expression: "10_000_000 / 88_000"
+## Formatting Expectations
+- Use **markdown for calculations** (e.g., **170,000 / 45,000 ≈ 3.78×**).
+- Follow explicit hierarchical structure for logical organization.
 
-tool_results:
-  [search_docs] "[performance]\nTypical throughput benchmarks (8-core machine,
-                 msgpack serialization, simple map step):
-                   workers=1:  ~45,000 records/sec
-                   workers=2:  ~88,000 records/sec ..."
-  [calculate]   "113.63636363636364"
+## Examples
+**Input:** "My deduplication window is set to window=10000. How many unique
+records can I track, and what is the maximum window size the docs recommend?"
+**Output:** "window=10000 tracks up to 10,000 recent records. The docs do not
+specify a maximum window size for deduplication, but for windowed aggregation
+they recommend keeping windows below 100k records per key to avoid GC pressure."
 
-answer: "The docs quote ~88,000 records/sec at workers=2 for a simple map step
-         on an 8-core machine with msgpack serialization. For a 10-million-record
-         job: 10,000,000 / 88,000 ≈ 113.6 seconds (~1.9 minutes)."
+**Input:** "What is the throughput ratio between workers=4 and workers=1 for a
+CPU-bound step?"
+**Output:** "The docs quote ~170,000 records/sec at workers=4 and ~45,000
+records/sec at workers=1. Ratio: **170,000 / 45,000 ≈ 3.78×**."
 ```
 
-Score: 5/5. The figure is exact, the arithmetic is verified, and every claim
-traces directly to a tool result.
-
-**Question:** *"pyflow's initial release was 2024-01-15. How many days ago was that?"*
-
-**Before** (score: 0.200 / 5):
-```
-tools_called: (no tools called)
-tool_results: (no tool results)
-
-"pyflow was initially released on January 15, 2024, which was approximately
- 14–15 months ago."
-```
-
-The model estimated from its knowledge cutoff without calling `get_date`. The
-figure is wrong (vague and stale) and no `calculate` was called to verify.
-Judge scores 1 — the answer contains a date claim with no grounding.
-
-**After** (score: 1.000 / 5):
-```
-tools_called:
-  [get_date]  (no args)
-  [calculate] expression: "(__import__('datetime').date.today() - ...)"
-              (reflex passes the date string from get_date() back to calculate)
-
-tool_results:
-  [get_date]  "2026-04-19"
-  [calculate] "826"
-
-answer: "Today is 2026-04-19. pyflow's initial release was 2024-01-15, which
-         was 826 days ago."
-```
-
-Score: 5/5. The date is real (from `get_date`), the arithmetic is verified
-(from `calculate`), and the answer is exact.
-
-## The optimized prompt
-
-```text title="dev_assistant/best_prompt.md"
-You are a developer assistant for the pyflow data-pipeline library.
-
-<tool_rules>
-1. For ANY question about pyflow APIs, configuration, or behaviour,
-   call search_docs before answering.
-2. For ANY question involving a number, rate, duration, count, or ratio,
-   call calculate — even when the numeric inputs are already known.
-3. For ANY question involving a date ("how long ago", "how many days"),
-   call get_date first, then call calculate with the date difference.
-4. Ground your answer entirely in tool results. Do not use training knowledge
-   to fill in gaps — if the docs don't cover it, say so explicitly.
-5. Never state a number you have not verified with calculate.
-</tool_rules>
-
-<examples>
-Q: How many records can I process in 2 hours with workers=8?
-Tools called:
-  search_docs("workers throughput benchmark") →
-    "[performance] workers=8: ~310,000 records/sec"
-  calculate("310_000 * 7_200") → "2232000000"
-A: The docs quote ~310,000 records/sec at workers=8. Over 2 hours (7,200 sec):
-   310,000 × 7,200 = 2,232,000,000 records.
-
-Q: How many days ago was pyflow 0.5.0 released (2025-01-08)?
-Tools called:
-  get_date() → "2026-04-19"
-  calculate("(2026*365+109) - (2025*365+8)") → "466"
-A: Today is 2026-04-19. pyflow 0.5.0 was released on 2025-01-08, which was
-   466 days ago.
-</examples>
-```
-
-The XML `<tool_rules>` block handles the three structural gaps: when to call
-each tool, that `calculate` is mandatory even for simple arithmetic, and that
-`get_date` must precede any date subtraction. The two few-shot examples show
-the expected two-step tool pattern for the two hardest question types.
+The prompt grew from 7 words to a structured document. The structural phase
+contributed the markdown headers and explicit response phases. The iterative
+phase added the concrete examples — one showing how to handle a doc-lookup with
+a precise numerical answer, one showing how to structure a ratio calculation.
 
 ## Score trajectory
 
 ```
-Train : 0.3500 → 0.7692 → 0.7692 → 0.8077 → 0.8462 → 0.8333 → 0.8333
-Val   : 0.4286 → 0.8095 → 0.8095 → 0.8095 → 0.8095 → 0.8095 → 0.8571
+Train : 0.554 → 0.643 → 0.714 → 0.643 → 0.643 → 0.571 → 0.536 → 0.625 → 0.696 → 0.768
+Val   : 0.542 → 0.583 → 0.625 → 0.792 → 0.958 → 0.875 → 0.833 → 0.667 → 0.625 → 0.500
 ```
 
-The first big jump (0.35 → 0.77) is the structural phase discovering that
-explicit tool-use rules dominate prompt quality for agentic tasks. The
-subsequent iterative gains (+0.054, +0.038, +0.015) are each traceable to a
-specific class of failures: mental arithmetic, approximate date answers, and
-unsupported fabrications when `search_docs` returns nothing.
+Iterations 1–3 are the structural phase. Train and val climb together as the
+prompt gets better organized.
+
+Iterations 4–7 are the iterative phase. Notice that train and val diverge
+sharply: val hits **0.9583** at iteration 5 while train stays at 0.6429. Then
+as the prompt keeps growing (3,251 characters by iteration 6), train drops
+while val follows. This is over-optimization: the prompt is becoming too
+specific to the training distribution.
+
+Iterations 8–10 are PDO. The tournament finds variants that score well on the
+training examples (up to 0.7679), but these same variants score only 0.5000 on
+val — they've learned the training examples, not the task. The val split
+catches this and picks iteration 5's prompt instead.
+
+The divergence between train and val is exactly what the validation split is
+designed to expose. Without it, reflex would have saved the PDO champion
+(train=0.768, val=0.500) — an overfit prompt that likely would have tested
+worse than 0.7250.
 
 ## Key takeaways
 
@@ -433,27 +561,45 @@ judge on every iteration.
 estimates and the optimizer would have no signal to fix the grounding problem.
 The rubric is as important as the starting prompt.
 
-**Multi-round tool loops unlock compound questions.** The two-call pattern
-(search_docs → calculate) is the most common pattern in this dataset. A
-single-call pipeline would either skip `calculate` or skip `search_docs`. The
-agentic loop lets the model decide the order and number of calls per question.
-
 **Structural fixes dominate for tool-use problems.** The single biggest gain
-(+0.42 on train) came from adding explicit `<tool_rules>` in the structural
-phase — before the optimizer had diagnosed a single specific failure. Tool use
-is a behaviour that small models exhibit reliably when told to, and ignore
+(+0.16 on train, iteration 1) came from adding markdown structure and explicit
+response phases — before the optimizer had diagnosed a single specific failure.
+Tool use is a behaviour that models exhibit reliably when told to, and ignore
 reliably when not told to.
 
-**Qwen3 8B is a good judge for tool-grounding tasks.** Grounding evaluation
-requires checking: was the right tool called? does the answer match the tool
-output? Both are mechanical comparisons that a small model handles well. You
-do not need a frontier judge for this.
+**The val split catches over-optimization.** Train and val diverged sharply in
+the iterative phase: the prompt that scored 0.9583 on val (iteration 5) scored
+only 0.6429 on train, while the PDO champion scored 0.7679 on train but 0.5000
+on val. Reflex correctly picked iteration 5 for the final test eval. Without a
+val set this would have been invisible.
+
+**Prompt length is not a proxy for quality.** The iterative phase grew the
+prompt from 856 to 3,251 characters and train score dropped by 0.18. The final
+best-val prompt was the 2,277-character iteration-5 version — not the longest,
+not the shortest, but the one that generalised best.
 
 ## Run it yourself
 
 The pipeline, dataset, starting prompt, and judge rubric are in
 `examples/dev_assistant/`. The pipeline works with any OpenAI-compatible
 provider — pick whichever you have credentials for.
+
+### A note on the judge
+
+The `--judge` model is separate from the pipeline model and matters a lot for
+this task. The judge reads the full trace — which tools were called, what they
+returned, and what the final answer said — and applies the `judge.md` rubric.
+
+Small models (7B–14B) consistently score too leniently: they see that the
+arithmetic in the answer is correct and give 5/5 even when `calculate` was never
+called. A frontier model (Claude Sonnet, GPT-4o) enforces the "tool bypassed →
+score 2" rule reliably because it strictly audits `tools_called` against the
+rubric rather than just checking the answer for correctness.
+
+**Recommendation**: use a frontier model as judge even if you run the pipeline
+locally on Ollama. The pipeline model pays the per-token cost of tool calling;
+the judge only reads the final trace — it makes a handful of calls per
+iteration, so the added cost is small.
 
 **OpenRouter** (cloud, needs `OPENROUTER_API_KEY`):
 
@@ -466,25 +612,51 @@ aevyra-reflex optimize \
   --pipeline-file examples/dev_assistant/pipeline.py \
   --inputs-file   examples/dev_assistant/questions.json \
   examples/dev_assistant/prompt.md \
-  --judge openrouter/qwen/qwen3-8b \
+  --judge openrouter/anthropic/claude-sonnet-4-5 \
   --judge-criteria examples/dev_assistant/judge.md \
   --strategy auto \
   --max-workers 6 \
   -o examples/dev_assistant/best_prompt.md
 ```
 
-**Ollama** (local, no API key — run `ollama pull qwen3:8b` first):
+**Ollama pipeline + frontier judge** (run the agent locally, judge via OpenRouter):
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+
+PIPELINE_PROVIDER=ollama aevyra-reflex optimize \
+  --pipeline-file examples/dev_assistant/pipeline.py \
+  --inputs-file   examples/dev_assistant/questions.json \
+  examples/dev_assistant/prompt.md \
+  --judge openrouter/anthropic/claude-sonnet-4-5 \
+  --judge-criteria examples/dev_assistant/judge.md \
+  --strategy auto \
+  --max-workers 2 \
+  -o examples/dev_assistant/best_prompt.md
+```
+
+This is the recommended local setup: `qwen3:8b` runs on your machine for free,
+Claude Sonnet scores the traces reliably. The judge accounts for most of the
+OpenRouter cost — well under $5 for a full run.
+
+**Fully local** (Ollama for both pipeline and judge — lower quality scores but
+no cloud calls needed):
 
 ```bash
 PIPELINE_PROVIDER=ollama aevyra-reflex optimize \
   --pipeline-file examples/dev_assistant/pipeline.py \
   --inputs-file   examples/dev_assistant/questions.json \
   examples/dev_assistant/prompt.md \
+  --judge ollama/qwen3:8b \
   --judge-criteria examples/dev_assistant/judge.md \
   --strategy auto \
   --max-workers 2 \
   -o examples/dev_assistant/best_prompt.md
 ```
+
+Note: with a local judge, scores will be inflated (the model is lenient with
+itself) and the optimizer will have weaker signal. Expect a lower-quality
+optimized prompt than the frontier-judge runs.
 
 **Any other OpenAI-compatible endpoint** (Together AI, vLLM, LM Studio, etc.):
 
@@ -496,6 +668,7 @@ aevyra-reflex optimize \
   --pipeline-file examples/dev_assistant/pipeline.py \
   --inputs-file   examples/dev_assistant/questions.json \
   examples/dev_assistant/prompt.md \
+  --judge openrouter/anthropic/claude-sonnet-4-5 \
   --judge-criteria examples/dev_assistant/judge.md \
   --strategy auto \
   -o examples/dev_assistant/best_prompt.md
@@ -520,10 +693,72 @@ python examples/dev_assistant/pipeline.py \
   "At workers=4, how many records can I process in 90 minutes?"
 ```
 
-You should see output like this:
+With the **unoptimized** starting prompt you should see output like this — this
+is the baseline failure mode the optimizer is designed to fix:
 
 ```
+Provider : ollama
+Model    : qwen3:8b
+Prompt   : examples/dev_assistant/prompt.md
 Question : At workers=4, how many records can I process in 90 minutes?
+
+[At workers=4, how many records can I p…] →  search_docs(query='throughput benchmark workers records per second')
+[At workers=4, how many records can I p…] ←  [performance]
+[At workers=4, how many records can I p…] ✓  answer  (1 tool call)
+
+=== tools_called ===
+[
+  {"name": "search_docs", "args": {"query": "throughput benchmark workers records per second"}}
+]
+
+=== tool_results ===
+  [search_docs] [performance]
+  Processing speed and throughput benchmarks — how many records per second
+  pyflow can process with different worker counts.
+  Benchmark conditions: 8-core machine, msgpack serialization, simple map step.
+    workers=1:  ~45,000 records/sec   (45k rps)
+    workers=2:  ~88,000 records/sec   (88k ...
+
+=== answer ===
+With 4 workers, pyflow processes 170,000 records per second under the benchmark
+conditions. For 90 minutes (5,400 seconds):
+170,000 records/sec × 5,400 sec = 918,000,000 records.
+
+=== pre-check ===
+  ⚠  answer contains arithmetic but calculate was not called — numbers are unverified
+  → predicted score: 1–2/5  (grounding failures detected)
+  tip: run the full optimizer with a frontier judge to fix these —
+       --judge openrouter/anthropic/claude-sonnet-4-5
+```
+
+The answer happens to be numerically correct, but `calculate` was never called —
+the model multiplied mentally from the retrieved benchmark figure. The judge
+rubric scores this **2/5**: correct answer, tool bypassed. The pre-check
+flags this mechanically without needing a judge inference call.
+
+This is exactly the signal the optimizer uses. After running `aevyra-reflex
+optimize`, test the best prompt with `--prompt`:
+
+```bash
+python examples/dev_assistant/pipeline.py --provider ollama \
+  --prompt examples/dev_assistant/best_prompt.md \
+  "At workers=4, how many records can I process in 90 minutes?"
+```
+
+With the optimized prompt you should see two tool calls, a grounded answer that
+explicitly cites the calculate result, and a clean pre-check:
+
+```
+Provider : ollama
+Model    : qwen3:8b
+Prompt   : examples/dev_assistant/best_prompt.md
+Question : At workers=4, how many records can I process in 90 minutes?
+
+[At workers=4, how many records can I p…] →  search_docs(query='throughput benchmark workers records per second')
+[At workers=4, how many records can I p…] ←  [performance]
+[At workers=4, how many records can I p…] →  calculate(expression='170_000 * 5_400')
+[At workers=4, how many records can I p…] ←  918000000
+[At workers=4, how many records can I p…] ✓  answer  (2 tool calls)
 
 === tools_called ===
 [
@@ -535,22 +770,22 @@ Question : At workers=4, how many records can I process in 90 minutes?
   [search_docs] [performance]
   Processing speed and throughput benchmarks — how many records per second
   pyflow can process with different worker counts.
-    workers=4:  ~170,000 records/sec  (170k rps)
-    ...
-
+  Benchmark conditions: 8-core machine, msgpack serialization, simple map step.
+    workers=1:  ~45,000 records/sec   (45k rps)
+    workers=2:  ~88,000 records/sec   (88k ...
   [calculate] 918000000
 
 === answer ===
-The docs quote ~170,000 records/sec at workers=4. Over 90 minutes (5,400 seconds):
-170,000 × 5,400 = 918,000,000 records.
+The docs state that workers=4 process ~170,000 records/sec. Over 90 minutes (5,400 seconds):
+
+calculate returned 918000000, so the answer is 918,000,000 records.
+
+=== pre-check ===
+  ✓  no obvious grounding failures detected
 ```
 
-The two things to check: `tools_called` shows two entries (the agent called both
-`search_docs` and `calculate`, not just one), and `tool_results` for `search_docs`
-shows the `[performance]` doc — not `[rate_limit]`. If `search_docs` returns
-`rate_limit` and the answer cites "100 records/sec", the model confused the
-throughput cap with the benchmark figure; run again, since Qwen3 8B's tool
-selection has some variance at the default temperature.
+Both tools called, arithmetic verified by `calculate`, answer explicitly cites
+the tool result. This is the target behaviour the optimizer produces.
 
 Total cost on OpenRouter for a full run: well under $5. The agent itself
 (Qwen3 8B) handles both the tool-calling and the final generation. The judge
