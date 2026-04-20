@@ -421,10 +421,16 @@ class StructuralStrategy(Strategy):
             _iter_state = {}
             _save_iter_state({})
 
-        best = max(iterations, key=lambda r: r.score)
+        if iterations:
+            best = max(iterations, key=lambda r: r.score)
+            best_prompt = best.system_prompt
+            best_score = best.score
+        else:
+            best_prompt = initial_prompt
+            best_score = 0.0
         return OptimizationResult(
-            best_prompt=best.system_prompt,
-            best_score=best.score,
+            best_prompt=best_prompt,
+            best_score=best_score,
             iterations=iterations,
             converged=False,
         )

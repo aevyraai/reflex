@@ -85,11 +85,16 @@ class AgentTrace:
         ideal:    The expected/reference output for this input. Optional but
                   recommended: used by the judge and displayed in failure reports.
         metadata: Arbitrary key/value metadata attached to the trace.
+        tokens:   Total tokens consumed by all LLM calls inside the pipeline
+                  function for this trace (prompt + completion).  Set this from
+                  ``response.usage.total_tokens`` so Reflex can report accurate
+                  token counts alongside judge tokens.  Defaults to 0 (untracked).
     """
 
     nodes: list[TraceNode]
     ideal: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    tokens: int = 0
 
     @property
     def optimize_node(self) -> TraceNode | None:

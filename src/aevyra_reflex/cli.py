@@ -51,7 +51,7 @@ def main_callback(
 @app.command()
 def optimize(
     dataset: Annotated[Optional[Path], typer.Argument(help="Path to a JSONL eval dataset.")] = None,
-    prompt: Annotated[Path, typer.Argument(help="Path to the initial system prompt (.md).")] = ...,
+    prompt: Annotated[Optional[Path], typer.Argument(help="Path to the initial system prompt (.md).")] = None,
     model: Annotated[
         list[str],
         typer.Option("-m", "--model", help="Model to optimize, in 'provider/model' format."),
@@ -86,7 +86,7 @@ def optimize(
     ] = None,
     strategy: Annotated[
         str,
-        typer.Option("-s", "--strategy", help="Strategy: 'auto' (default), 'iterative', 'structural', or 'pdo' (not available in pipeline mode)."),
+        typer.Option("-s", "--strategy", help="Strategy: 'auto' (default), 'iterative', 'structural', or 'pdo'."),
     ] = "auto",
     reasoning_model: Annotated[
         Optional[str],
@@ -294,7 +294,17 @@ def optimize(
 
     from aevyra_reflex.optimizer import OptimizerConfig, PromptOptimizer, _resolve_provider
 
+    # In pipeline mode there is no dataset positional, so Typer fills `dataset`
+    # with whatever comes after the flags — which is actually the prompt file.
+    # Detect this and swap so users don't have to pass a dummy dataset argument.
+    if pipeline_file is not None and prompt is None and dataset is not None:
+        prompt = dataset
+        dataset = None
+
     # Validate inputs
+    if prompt is None:
+        typer.echo("Error: missing argument 'PROMPT'. Pass the path to your prompt .md file.", err=True)
+        raise typer.Exit(code=1)
     if not prompt.exists():
         typer.echo(f"Error: prompt file not found: {prompt}", err=True)
         raise typer.Exit(code=1)
@@ -313,9 +323,7 @@ def optimize(
     if not is_pipeline_mode and not model:
         typer.echo("Error: at least one --model is required (or use --pipeline-file for pipeline mode).", err=True)
         raise typer.Exit(code=1)
-    if is_pipeline_mode and strategy == "pdo":
-        typer.echo("Error: pipeline mode is not compatible with --strategy pdo. Use iterative, structural, or auto.", err=True)
-        raise typer.Exit(code=1)
+
     if not pipeline_file and not dataset.exists():
         typer.echo(f"Error: dataset file not found: {dataset}", err=True)
         raise typer.Exit(code=1)
@@ -460,6 +468,10 @@ def optimize(
             typer.echo("Error: inputs file must contain a JSON array.", err=True)
             raise typer.Exit(code=1)
         optimizer.set_pipeline(pipeline_fn_callable).set_inputs(raw_inputs)
+        # Store paths in extra_kwargs so the run config has a stable identifier
+        # for --resume auto-find (stored as dataset_path in the run's config.json).
+        config.extra_kwargs["_pipeline_file"] = str(pipeline_file.resolve())
+        config.extra_kwargs["_inputs_file"] = str(inputs_file.resolve())
     else:
         optimizer.set_dataset(ds)
 
@@ -594,7 +606,7 @@ def optimize(
         typer.echo(f"Resuming run {resume_run.run_id}...")
     elif resume:
         resume_run = store.find_incomplete_run(
-            dataset_path=str(dataset),
+            dataset_path=str(inputs_file.resolve()) if is_pipeline_mode else str(dataset),
         )
         if resume_run is None:
             typer.echo("No interrupted run found. Starting a new run.")

@@ -61,12 +61,7 @@ class PDOStrategy(Strategy):
         update_strategy_state: Any | None = None,
         eval_fn: Any | None = None,
     ) -> OptimizationResult:
-        if eval_fn is not None:
-            raise NotImplementedError(
-                "Pipeline mode (set_pipeline) is not yet supported with the 'pdo' strategy. "
-                "Use strategy='iterative', 'structural', or 'auto' with set_pipeline()."
-            )
-
+        is_pipeline = eval_fn is not None
         pdo_config = _PDOConfig.from_optimizer_config(config)
 
         # Summarize the dataset so the agent understands the task
@@ -129,16 +124,24 @@ class PDOStrategy(Strategy):
             # Run duels in parallel
             def _run_one_duel(pair: tuple[int, int]) -> tuple[int, int, str]:
                 i, j = pair
-                winner = _run_duel(
-                    prompt_a=pool[i],
-                    prompt_b=pool[j],
-                    dataset=dataset,
-                    providers=providers,
-                    metrics=metrics,
-                    agent=agent,
-                    config=config,
-                    num_samples=pdo_config.samples_per_duel,
-                )
+                if is_pipeline:
+                    winner = _run_duel_pipeline(
+                        prompt_a=pool[i],
+                        prompt_b=pool[j],
+                        dataset=dataset,
+                        eval_fn=eval_fn,
+                    )
+                else:
+                    winner = _run_duel(
+                        prompt_a=pool[i],
+                        prompt_b=pool[j],
+                        dataset=dataset,
+                        providers=providers,
+                        metrics=metrics,
+                        agent=agent,
+                        config=config,
+                        num_samples=pdo_config.samples_per_duel,
+                    )
                 return i, j, winner
 
             max_duel_workers = min(len(duel_pairs), config.max_workers or 4)
@@ -204,14 +207,26 @@ class PDOStrategy(Strategy):
                     for m in RANKING_METHODS
                 }
 
-            # Record iteration
+            # In pipeline mode, score the champion with eval_fn so the reported
+            # score is a real quality metric (not a win rate), which lets the
+            # outer auto strategy's convergence check and best-val tracking work
+            # correctly.  In dataset mode, keep the win rate (no eval_fn).
+            win_rate = _win_rate(W, current_best_idx)
+            if is_pipeline:
+                _eval_result = eval_fn(pool[current_best_idx], dataset)
+                champion_score = _eval_result[0] if isinstance(_eval_result, tuple) else _eval_result
+                logger.info(f"  Champion win rate: {win_rate:.3f}  eval score: {champion_score:.4f}")
+            else:
+                champion_score = win_rate
+                logger.info(f"  Champion win rate: {win_rate:.3f}")
+
             record = IterationRecord(
                 iteration=round_num,
                 system_prompt=pool[current_best_idx],
-                score=_win_rate(W, current_best_idx),
+                score=champion_score,
                 reasoning=(
                     f"Pool size: {len(pool)}, champion index: {current_best_idx}, "
-                    f"ranking: {ranking_method}"
+                    f"win_rate: {win_rate:.3f}, ranking: {ranking_method}"
                 ),
             )
             iterations.append(record)
@@ -220,8 +235,6 @@ class PDOStrategy(Strategy):
             if record.score > best_score:
                 best_score = record.score
                 best_idx = current_best_idx
-
-            logger.info(f"  Champion win rate: {record.score:.3f}")
 
             # Mutate top prompts periodically to explore (in parallel)
             if round_num % pdo_config.mutation_frequency == 0:
@@ -270,12 +283,16 @@ class PDOStrategy(Strategy):
         # Final: return the best prompt found
         final_rankings = _rank(W, ranking_method, method_alphas)
         final_best = final_rankings[0]
+        final_win_rate = _win_rate(W, final_best)
+        # In pipeline mode best_score was already measured as a real eval score;
+        # in dataset mode fall back to the win rate.
+        final_score = best_score if is_pipeline else final_win_rate
 
         return OptimizationResult(
             best_prompt=pool[final_best],
-            best_score=_win_rate(W, final_best),
+            best_score=final_score,
             iterations=iterations,
-            converged=best_score >= config.score_threshold,
+            converged=final_score >= config.score_threshold,
         )
 
 
@@ -412,6 +429,34 @@ def _thompson_sample_pair(
     second = int(rng.choice(second_choices))
 
     return first, second
+
+
+def _run_duel_pipeline(
+    *,
+    prompt_a: str,
+    prompt_b: str,
+    dataset: Any,
+    eval_fn: Any,
+) -> str:
+    """Pipeline-mode duel: run eval_fn on both prompts, compare scores.
+
+    eval_fn already parallelises internally, so we run the two evals
+    concurrently with a small thread pool to halve wall-clock time.
+    The ``dataset`` argument is forwarded as-is; _run_pipeline_eval ignores
+    it and re-runs against the raw inputs, but the signature requires it.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future_a = pool.submit(eval_fn, prompt_a, dataset)
+        future_b = pool.submit(eval_fn, prompt_b, dataset)
+        score_a = future_a.result()
+        score_b = future_b.result()
+    # eval_fn returns (score, failing_samples, tokens) — unpack if needed
+    if isinstance(score_a, tuple):
+        score_a = score_a[0]
+    if isinstance(score_b, tuple):
+        score_b = score_b[0]
+    logger.debug(f"    Pipeline duel: A={score_a:.4f}  B={score_b:.4f} → {'A' if score_a >= score_b else 'B'} wins")
+    return "A" if score_a >= score_b else "B"
 
 
 def _run_duel(

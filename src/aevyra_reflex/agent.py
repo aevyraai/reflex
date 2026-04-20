@@ -373,11 +373,17 @@ class LLM:
         api_key: str | None = None,
         base_url: str | None = None,
         source_model: str | None = None,
+        response_language: str | None = None,
     ):
         self.model = model
         self.max_tokens = max_tokens
         self.provider = provider
         self.source_model = source_model  # original model this prompt was written for
+        # Language to respond in (e.g. "English", "Chinese", "Japanese").
+        # When set, a language instruction is prepended to every generate() call
+        # so the reasoning model writes prompts and explanations in the correct
+        # language rather than defaulting to its training-data majority language.
+        self.response_language = response_language
         self.tokens_used: int = 0  # cumulative reasoning tokens across all calls
         self._backend = _resolve_agent_backend(
             model, max_tokens,
@@ -387,14 +393,25 @@ class LLM:
         )
         backend_name = type(self._backend).__name__
         logger.info(f"Reasoning model: {model} (backend: {backend_name})")
+        if response_language:
+            logger.info(f"Reasoning model response language: {response_language}")
 
     def generate(self, prompt: str, *, temperature: float = 1.0) -> str:
         """Send a prompt to the agent and return the text response.
 
-        If ``source_model`` was set at construction time, a migration context
-        block is prepended to every prompt so the reasoning model knows which
-        model family the prompt originated from.
+        Context blocks prepended (in order, when applicable):
+
+        1. ``LANGUAGE_INSTRUCTION`` — if ``response_language`` is set, instructs
+           the reasoning model to write all output in the detected dataset
+           language.  This prevents multilingual models (e.g. Qwen3) from
+           silently switching to their training-majority language.
+
+        2. ``SOURCE_MODEL_CONTEXT`` — if ``source_model`` is set, reminds the
+           reasoning model of stylistic conventions for the source model family.
         """
+        if self.response_language:
+            from aevyra_reflex.prompts import LANGUAGE_INSTRUCTION
+            prompt = LANGUAGE_INSTRUCTION.format(language=self.response_language) + prompt
         if self.source_model:
             from aevyra_reflex.prompts import SOURCE_MODEL_CONTEXT
             prompt = SOURCE_MODEL_CONTEXT.format(source_model=self.source_model) + prompt

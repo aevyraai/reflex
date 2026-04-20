@@ -397,7 +397,8 @@ def search_docs(query: str) -> str:
         # IDF-weighted overlap: rare terms count more than ubiquitous ones
         score = sum(_IDF.get(t, 0.0) for t in query_tokens & doc_tokens)
         scores.append((score, key))
-    scores.sort(reverse=True)
+    # Sort descending by score; break ties by insertion order (stable key ordering)
+    scores.sort(key=lambda x: -x[0])
 
     results: list[str] = []
     for score, key in scores[:3]:
@@ -415,13 +416,21 @@ def calculate(expression: str) -> str:
       "170_000 * 5400"              →  918000000
       "10_000_000 / 88_000"         →  113.636...
 
-    Date-difference examples (use after calling get_date()):
-      "(datetime.date(2026,4,19) - datetime.date(2024,1,15)).days"  →  826
+    Date-difference examples — use the pre-bound `today` variable; do NOT
+    call datetime.date.today() or get_date() inside the expression:
+      "(today - datetime.date(2025,1,8)).days"   →  days since 2025-01-08
+      "(datetime.date(2026,6,1) - today).days"   →  days until 2026-06-01
     """
     safe_globals: dict[str, Any] = {
         "__builtins__": {},
         "math": math,
         "datetime": datetime,
+        # Pre-computed today so expressions like (datetime.date(2025,3,1) - today).days
+        # work without the model needing to call datetime.date.today() or get_date()
+        # inside eval (both fail: today() needs builtins, get_date is not in scope).
+        "today": datetime.date.today(),
+        # Allow get_date() calls inside calculate for models that try it anyway
+        "get_date": get_date,
         "abs": abs,
         "round": round,
         "min": min,
@@ -492,7 +501,10 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "description": (
                             "A valid Python expression. Arithmetic: '170_000 * 5400'. "
-                            "Date diff: '(datetime.date(2026,4,19) - datetime.date(2024,1,15)).days'."
+                            "Date diff: use the pre-bound `today` variable — "
+                            "'(today - datetime.date(2025,1,8)).days' or "
+                            "'(datetime.date(2026,6,1) - today).days'. "
+                            "Do NOT call datetime.date.today() or get_date() inside the expression."
                         ),
                     }
                 },
@@ -523,11 +535,38 @@ def _strip_thinking(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
+def _trace(prefix: str, msg: str) -> None:
+    """Print a progress line to stderr (visible in CLI; does not affect return values).
+
+    Set PIPELINE_QUIET=1 to suppress all progress output.
+    """
+    if os.environ.get("PIPELINE_QUIET", "").lower() not in ("1", "true", "yes"):
+        import sys
+        print(f"{prefix} {msg}", file=sys.stderr, flush=True)
+
+
+def _fmt_args(args: dict | list) -> str:
+    """One-line summary of tool arguments for progress output."""
+    if not isinstance(args, dict):
+        return repr(args)[:120]
+    parts = []
+    for k, v in args.items():
+        v_str = str(v)
+        parts.append(f"{k}={v_str[:60]!r}" if len(v_str) > 60 else f"{k}={v_str!r}")
+    return ", ".join(parts)
+
+
+def _fmt_result(result: str) -> str:
+    """First line of a tool result, truncated to 80 chars."""
+    first_line = result.strip().splitlines()[0] if result.strip() else result
+    return first_line[:80] + ("…" if len(first_line) > 80 else "")
+
+
 # ---------------------------------------------------------------------------
 # Pipeline function
 # ---------------------------------------------------------------------------
 
-def pipeline_fn(prompt: str, question: str) -> AgentTrace:
+def pipeline_fn(prompt: str, question: str | dict) -> AgentTrace:
     """
     Run a full agentic turn and return a structured trace for Reflex to score.
 
@@ -536,12 +575,33 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
     benchmark, then call calculate to compute job duration, then compose a
     grounded answer.
 
+    ``question`` may be a plain string or a dict with ``"question"`` and
+    optional ``"ideal"`` fields (the format used by questions.json).
+
     Nodes
     -----
     tools_called   (optimize=False) — ordered list of every tool call made
     tool_results   (optimize=False) — ordered list of every tool result received
     answer         (optimize=True)  — final answer synthesised from tool results
+
+    Progress lines are printed to stderr as each tool fires so the CLI shows
+    activity rather than a silent wait.  Set PIPELINE_QUIET=1 to suppress.
+
+    IMPORTANT: all LLM calls use temperature=0.0.  Reflex compares prompt
+    variants by running this function multiple times; non-zero temperature
+    introduces sampling noise that makes variant comparisons unreliable.
     """
+    # Unpack dict inputs (e.g. {"question": "...", "ideal": "..."})
+    if isinstance(question, dict):
+        ideal: str | None = question.get("ideal")
+        question = question.get("question", str(question))
+    else:
+        ideal = None
+
+    # Short question prefix used in every progress line so parallel workers
+    # stay identifiable when their output interleaves.
+    q_prefix = f"[{question[:38]}{'…' if len(question) > 38 else ''}]"
+
     messages: list[dict] = [
         {"role": "system", "content": prompt},
         {"role": "user", "content": question},
@@ -550,6 +610,7 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
     all_calls: list[dict] = []
     all_results: list[dict] = []
     final_answer = ""
+    total_tokens = 0
 
     for _round in range(MAX_TOOL_ROUNDS):
         response = client.chat.completions.create(
@@ -557,12 +618,16 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
             messages=messages,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
+            temperature=0.0,
         )
+        if response.usage:
+            total_tokens += response.usage.total_tokens
         msg = response.choices[0].message
 
         if not msg.tool_calls:
             # Model finished — extract answer (strip any thinking tokens)
             final_answer = _strip_thinking(msg.content or "")
+            _trace(q_prefix, f"✓  answer  ({len(all_calls)} tool call{'s' if len(all_calls) != 1 else ''})")
             break
 
         # Append assistant turn (may include tool_calls)
@@ -573,15 +638,30 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
             fn_name = tc.function.name
             try:
                 fn_args = json.loads(tc.function.arguments)
+                if not isinstance(fn_args, dict):
+                    # Model returned a JSON array instead of an object —
+                    # treat each element as a positional arg value
+                    fn_args = {str(i): v for i, v in enumerate(fn_args)} if isinstance(fn_args, list) else {}
             except json.JSONDecodeError:
                 fn_args = {}
+
+            _trace(q_prefix, f"→  {fn_name}({_fmt_args(fn_args)})")
 
             all_calls.append({"name": fn_name, "args": fn_args})
 
             if fn_name in TOOL_REGISTRY:
-                result = TOOL_REGISTRY[fn_name](**fn_args)
+                try:
+                    result = TOOL_REGISTRY[fn_name](**fn_args)
+                except TypeError:
+                    # Model used wrong argument name — try passing the first value positionally
+                    try:
+                        result = TOOL_REGISTRY[fn_name](*fn_args.values())
+                    except Exception as exc:
+                        result = f"Tool call error: {exc}"
             else:
                 result = f"Unknown tool: {fn_name}"
+
+            _trace(q_prefix, f"←  {_fmt_result(result)}")
 
             all_results.append({"name": fn_name, "result": result})
             messages.append(
@@ -593,11 +673,16 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
             )
     else:
         # Exceeded MAX_TOOL_ROUNDS — force a final answer
+        _trace(q_prefix, f"→  (max rounds reached, forcing answer)")
         closing = client.chat.completions.create(
             model=MODEL,
             messages=messages,
+            temperature=0.0,
         )
+        if closing.usage:
+            total_tokens += closing.usage.total_tokens
         final_answer = _strip_thinking(closing.choices[0].message.content or "")
+        _trace(q_prefix, f"✓  answer  ({len(all_calls)} tool calls)")
 
     return AgentTrace(
         nodes=[
@@ -619,7 +704,9 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
                 output=final_answer,
                 optimize=True,
             ),
-        ]
+        ],
+        ideal=ideal,
+        tokens=total_tokens,
     )
 
 
@@ -683,6 +770,12 @@ Provider examples:
         metavar="KEY",
         help="API key (overrides env var lookup; not needed for Ollama)",
     )
+    _parser.add_argument(
+        "--prompt",
+        default=None,
+        metavar="FILE",
+        help="Path to a prompt file (default: examples/dev_assistant/prompt.md)",
+    )
     _args = _parser.parse_args()
 
     # Rebuild client from flags — overwrites module-level globals so pipeline_fn
@@ -694,12 +787,18 @@ Provider examples:
         api_key=_args.api_key,
     )
 
-    _prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
+    _prompt_path = _args.prompt or os.path.join(os.path.dirname(__file__), "prompt.md")
+    if not os.path.exists(_prompt_path):
+        _parser.error(
+            f"prompt file not found: {_prompt_path}\n"
+            + ("  (run the optimizer first to generate best_prompt.md)" if "best_prompt" in _prompt_path else "")
+        )
     with open(_prompt_path) as _f:
         _prompt = _f.read().strip()
 
     print(f"Provider : {_args.provider or os.environ.get('PIPELINE_PROVIDER', 'openrouter')}")
     print(f"Model    : {MODEL}")
+    print(f"Prompt   : {_prompt_path}")
     print(f"Question : {_args.question}\n")
 
     trace = pipeline_fn(_prompt, _args.question)
@@ -711,3 +810,48 @@ Provider examples:
         print(f"  [{r['name']}] {r['result'][:300]}")
     print("\n=== answer ===")
     print(trace.nodes[2].output)
+    print(f"\n=== tokens ===")
+    print(f"  {trace.tokens} total  (prompt + completion across all rounds)")
+
+    # --- Mechanical pre-check (no inference needed) ---
+    # Detects the most common grounding failures before the LLM judge runs.
+    # Small models acting as their own judge often miss these; this catches them
+    # mechanically and flags them regardless of the LLM score.
+    print("\n=== pre-check ===")
+    _tools_called = trace.nodes[0].output
+    _answer_text  = trace.nodes[2].output or ""
+    _called_names = (
+        {c["name"] for c in _tools_called}
+        if isinstance(_tools_called, list) else set()
+    )
+    _q_lower = _args.question.lower()
+
+    _warnings: list[str] = []
+
+    # 1. No tools called at all
+    if not _called_names:
+        _warnings.append("no tools were called — answer is entirely from model memory")
+
+    # 2. Arithmetic in answer but calculate not called
+    _has_numbers = bool(re.search(r'\d[\d,_.]*\s*[×x\*\/\+\-]\s*[\d,_.]+|\d+\s+records|\d+\s+second|\d+\s+minute|\d+\s+hour', _answer_text))
+    if _has_numbers and "calculate" not in _called_names:
+        _warnings.append("answer contains arithmetic but calculate was not called — numbers are unverified")
+
+    # 3. Date claim in answer but get_date not called
+    _has_date_claim = bool(re.search(r'\d+\s+(day|week|month|year)|ago|since\s+\d{4}', _answer_text, re.IGNORECASE))
+    if _has_date_claim and "get_date" not in _called_names:
+        _warnings.append("answer makes a date/age claim but get_date was not called")
+
+    # 4. Question asks about workers/throughput but search_docs not called
+    _needs_docs = any(kw in _q_lower for kw in ("workers", "how many records", "throughput", "records per", "how long", "how fast"))
+    if _needs_docs and "search_docs" not in _called_names:
+        _warnings.append("question requires documentation but search_docs was not called")
+
+    if _warnings:
+        for _w in _warnings:
+            print(f"  ⚠  {_w}")
+        print(f"  → predicted score: 1–2/5  (grounding failures detected)")
+        print(f"  tip: run the full optimizer with a frontier judge to fix these —")
+        print(f"       --judge openrouter/anthropic/claude-sonnet-4-5")
+    else:
+        print(f"  ✓  no obvious grounding failures detected")
