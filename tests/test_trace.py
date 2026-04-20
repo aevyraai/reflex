@@ -236,15 +236,6 @@ class TestPipelineModeValidation:
         with pytest.raises(ValueError, match="empty"):
             opt.run("initial prompt")
 
-    def test_pipeline_rejects_pdo_strategy(self):
-        from aevyra_reflex.optimizer import OptimizerConfig
-        opt = PromptOptimizer(OptimizerConfig(strategy="pdo", max_iterations=1))
-        opt.set_pipeline(lambda prompt, inp: None)
-        opt.set_inputs(["a"])
-        opt.add_metric(MagicMock(name="judge"))
-        with pytest.raises(ValueError, match="pdo"):
-            opt.run("initial prompt")
-
 
 # ---------------------------------------------------------------------------
 # PromptOptimizer._build_synthetic_dataset
@@ -382,26 +373,6 @@ class TestRunPipelineEval:
         assert "=== AGENT TRACE ===" in call_kwargs.kwargs.get("response", call_kwargs.args[0] if call_kwargs.args else "")
 
 
-# ---------------------------------------------------------------------------
-# PDO strategy guard
-# ---------------------------------------------------------------------------
-
-class TestPDOPipelineGuard:
-    def test_pdo_raises_not_implemented_when_eval_fn_set(self):
-        from aevyra_reflex.strategies.pdo import PDOStrategy
-
-        strategy = PDOStrategy()
-        with pytest.raises(NotImplementedError, match="pdo"):
-            strategy.run(
-                initial_prompt="prompt",
-                dataset=MagicMock(),
-                providers=[],
-                metrics=[],
-                agent=MagicMock(),
-                config=MagicMock(extra_kwargs={}),
-                eval_fn=lambda p, d, **kw: (0.5, [], 0),
-            )
-
 
 # ---------------------------------------------------------------------------
 # Integration: strategy receives eval_fn in pipeline mode
@@ -457,7 +428,7 @@ class TestPipelineModeStrategyIntegration:
         opt._metrics = [mock_metric]
 
         with (
-            patch("aevyra_reflex.optimizer.get_strategy", return_value=lambda: _RecordingStrategy()),
+            patch("aevyra_reflex.strategies.get_strategy", return_value=lambda: _RecordingStrategy()),
             patch.object(opt, "_run_eval", return_value=EvalSnapshot(
                 mean_score=0.5,
                 scores_by_metric={},
