@@ -477,6 +477,38 @@ python examples/dev_assistant/pipeline.py \
   "At workers=4, how many records can I process in 90 minutes?"
 ```
 
+You should see output like this:
+
+```
+Question : At workers=4, how many records can I process in 90 minutes?
+
+=== tools_called ===
+[
+  {"name": "search_docs", "args": {"query": "throughput benchmark workers records per second"}},
+  {"name": "calculate",   "args": {"expression": "170_000 * 5_400"}}
+]
+
+=== tool_results ===
+  [search_docs] [performance]
+  Processing speed and throughput benchmarks — how many records per second
+  pyflow can process with different worker counts.
+    workers=4:  ~170,000 records/sec  (170k rps)
+    ...
+
+  [calculate] 918000000
+
+=== answer ===
+The docs quote ~170,000 records/sec at workers=4. Over 90 minutes (5,400 seconds):
+170,000 × 5,400 = 918,000,000 records.
+```
+
+The two things to check: `tools_called` shows two entries (the agent called both
+`search_docs` and `calculate`, not just one), and `tool_results` for `search_docs`
+shows the `[performance]` doc — not `[rate_limit]`. If `search_docs` returns
+`rate_limit` and the answer cites "100 records/sec", the model confused the
+throughput cap with the benchmark figure; run again, since Qwen3 8B's tool
+selection has some variance at the default temperature.
+
 Total cost on OpenRouter for a full run: well under $5. The agent itself
 (Qwen3 8B) handles both the tool-calling and the final generation. The judge
 (also Qwen3 8B) scores each trace. The reasoning model that rewrites the prompt
