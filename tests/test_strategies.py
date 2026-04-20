@@ -1,7 +1,7 @@
 """Tests for strategy registry and strategy-specific logic."""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from aevyra_reflex.strategies import (
     Strategy,
@@ -17,7 +17,7 @@ from aevyra_reflex.strategies.pdo import (
     _run_duel_pipeline,
     PDOStrategy,
 )
-from aevyra_reflex.result import OptimizationResult, IterationRecord
+from aevyra_reflex.result import OptimizationResult
 
 import numpy as np
 
@@ -353,8 +353,6 @@ class TestAutoStrategyAxisFallback:
 
         Returns the axis that was actually selected.
         """
-        from aevyra_reflex.strategies.auto import AXES
-
         # Replicate the decision block in isolation
         axis = recommended_axis
         if axis not in available_axes:

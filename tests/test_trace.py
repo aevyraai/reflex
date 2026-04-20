@@ -340,8 +340,6 @@ class TestRunPipelineEval:
 
         def make_metric(inp_scores):
             metric = MagicMock()
-            call_count = [0]
-
             def score_fn(response, ideal, messages):
                 r = MagicMock()
                 # Return scores based on what's in response

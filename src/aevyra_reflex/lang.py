@@ -39,8 +39,6 @@ needed in future, a word-frequency or n-gram approach can be layered on.
 
 from __future__ import annotations
 
-import re
-import unicodedata
 
 # ---------------------------------------------------------------------------
 # Unicode ranges (half-open intervals, inclusive start / exclusive end)

@@ -448,7 +448,6 @@ def optimize(
     if is_pipeline_mode:
         # Dynamically import the pipeline file
         import importlib.util
-        import sys as _sys
         spec = importlib.util.spec_from_file_location("_user_pipeline", pipeline_file)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

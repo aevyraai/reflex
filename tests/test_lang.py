@@ -14,8 +14,6 @@
 
 """Tests for dataset language detection."""
 
-import pytest
-
 from aevyra_reflex.lang import detect_language
 
 
