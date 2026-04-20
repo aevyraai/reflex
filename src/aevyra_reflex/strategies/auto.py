@@ -139,9 +139,11 @@ class AutoStrategy(Strategy):
             # ----------------------------------------------------------
             # 1. Decide which axis to use
             # ----------------------------------------------------------
-            if is_resuming and phase_idx == resume_phase_idx and axes_used:
-                # Resume mid-phase: axis was already decided, reuse the saved one
-                axis = axes_used[-1]
+            if is_resuming and phase_idx == resume_phase_idx and len(axes_used) > phase_idx:
+                # The axis for this phase was already committed to the checkpoint
+                # (axes_used has one entry per phase whose axis was decided).
+                # Reuse it so resume is deterministic.
+                axis = axes_used[phase_idx]
                 logger.info(f"[auto] Resuming phase {phase_idx + 1} with axis '{axis}'")
             elif phase_idx == 0 and a_config.start_structural:
                 axis = "structural"
@@ -154,11 +156,39 @@ class AutoStrategy(Strategy):
                     axes_available=[a for a in available_axes if a not in axes_used],
                     axes_used=axes_used,
                 )
-                # Validate
-                if axis not in AXES:
-                    logger.warning(f"Agent recommended unknown axis {axis!r}, falling back to iterative")
-                    axis = "iterative"
+                # Validate — check against available_axes (not AXES) so we catch
+                # cases like fewshot being recommended for a label-free dataset.
+                if axis not in available_axes:
+                    # Prefer an unused available axis rather than defaulting to
+                    # iterative, which may have already been run in a prior phase.
+                    unused_available = [a for a in available_axes if a not in axes_used]
+                    fallback = unused_available[0] if unused_available else "iterative"
+                    if axis in AXES:
+                        logger.warning(
+                            f"Agent recommended {axis!r} but it is not available "
+                            f"for this dataset (available: {available_axes}). "
+                            f"Falling back to {fallback!r}."
+                        )
+                    else:
+                        logger.warning(
+                            f"Agent recommended unknown axis {axis!r}, falling back to {fallback!r}."
+                        )
+                    axis = fallback
                 axes_used.append(axis)
+                # Persist the axis decision immediately so that if the sub-
+                # strategy crashes before its first iteration callback, a
+                # subsequent resume can recover the correct axis rather than
+                # falling back to the previous phase's axis.
+                if update_strategy_state:
+                    update_strategy_state({
+                        "phase_idx": phase_idx,
+                        "phase_iters_done": 0,
+                        "axes_used": list(axes_used),
+                        "phase_history": list(phase_history),
+                        "global_iter": global_iter,
+                        "last_phase_score": last_phase_score,
+                        "sub_strategy_state": {},
+                    })
 
             full_budget = phase_budgets.get(axis, 3)
             # For the phase that was in-progress, subtract already-done iterations
@@ -341,6 +371,12 @@ class AutoStrategy(Strategy):
                     "phase_history": list(phase_history),
                     "global_iter": global_iter,
                     "last_phase_score": last_phase_score,
+                    # Clear sub-strategy state so the next phase doesn't
+                    # inherit a stale iteration count from a prior phase that
+                    # happened to use the same strategy (e.g. two iterative
+                    # phases in a row) or a phase whose sub-state survived in
+                    # the checkpoint after an early crash.
+                    "sub_strategy_state": {},
                 }
                 # Reset val history so the next phase's early stopping starts
                 # fresh.  Skip this on the last phase so the final test eval
