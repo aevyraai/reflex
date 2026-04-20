@@ -231,6 +231,16 @@ class OptimizationResult:
                             lines.append(f"  {line}")
                 lines.append("=" * 52)
 
+            # Before/after prompt diff
+            prompt_diff = self._before_after_prompt()
+            if prompt_diff:
+                lines.append("")
+                lines.append("  BEFORE / AFTER PROMPT")
+                lines.append("-" * 52)
+                for line in prompt_diff:
+                    lines.append(line)
+                lines.append("=" * 52)
+
             # Before/after example
             example = self._before_after_example()
             if example:
@@ -609,6 +619,30 @@ class OptimizationResult:
         if new_features:
             lines.append("  - Added: " + ", ".join(new_features))
 
+        return lines
+
+    def _before_after_prompt(self) -> list[str]:
+        """Show the initial prompt and the optimized prompt side-by-side."""
+        before_prompt = self.baseline.system_prompt if self.baseline else ""
+        after_prompt = self.final.system_prompt if self.final else self.best_prompt
+        if not before_prompt or not after_prompt:
+            return []
+        if before_prompt == after_prompt:
+            return ["  (prompt unchanged)"]
+
+        import textwrap
+
+        def _fmt_prompt(label: str, text: str) -> list[str]:
+            out = [f"  {label}:"]
+            for line in text.splitlines():
+                for wrapped in textwrap.wrap(line, width=72) if len(line) > 72 else [line]:
+                    out.append(f"    {wrapped}")
+            return out
+
+        lines: list[str] = []
+        lines.extend(_fmt_prompt("BEFORE", before_prompt))
+        lines.append("")
+        lines.extend(_fmt_prompt("AFTER", after_prompt))
         return lines
 
     def _before_after_example(self) -> list[str]:
