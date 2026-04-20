@@ -231,16 +231,49 @@ pyflow version history:
   0.5.2 — current stable (2025-03-01): bug fixes and performance improvements
 """,
     "performance": """
-Typical throughput benchmarks (8-core machine, msgpack serialization,
-simple map step):
-  workers=1:  ~45,000 records/sec
-  workers=2:  ~88,000 records/sec
-  workers=4:  ~170,000 records/sec
-  workers=8:  ~310,000 records/sec
+Processing speed and throughput benchmarks — how many records per second
+pyflow can process with different worker counts.
+Benchmark conditions: 8-core machine, msgpack serialization, simple map step.
+  workers=1:  ~45,000 records/sec   (45k rps)
+  workers=2:  ~88,000 records/sec   (88k rps)
+  workers=4:  ~170,000 records/sec  (170k rps)
+  workers=8:  ~310,000 records/sec  (310k rps)
 IO-bound steps (e.g. database writes) scale better; use workers='auto'.
 CPU-bound steps see ~85% parallel efficiency at workers=8.
+Capacity calculation: multiply records/sec by duration in seconds.
+  Example: workers=4 for 90 minutes = 170,000 * 5,400 = 918,000,000 records.
 """,
 }
+
+
+# ---------------------------------------------------------------------------
+# Search helpers — IDF-weighted keyword retrieval
+# ---------------------------------------------------------------------------
+
+def _stem(word: str) -> str:
+    """Strip trailing plural 's' so 'workers'/'worker' and 'records'/'record' align."""
+    if len(word) > 3 and word.endswith("s"):
+        return word[:-1]
+    return word
+
+
+def _tokenize(text: str) -> set[str]:
+    # Replace non-alphanumeric chars with spaces so "workers=4:" → "workers 4"
+    # rather than "workers4" (which would never match the query token "worker").
+    return {_stem(w) for w in re.sub(r"[^a-z0-9\s]", " ", text.lower()).split() if len(w) > 1}
+
+
+def _build_idf(kb: dict[str, str]) -> dict[str, float]:
+    """Compute inverse-document-frequency for every token in the knowledge base."""
+    N = len(kb)
+    df: dict[str, int] = {}
+    for passage in kb.values():
+        for tok in _tokenize(passage):
+            df[tok] = df.get(tok, 0) + 1
+    return {tok: math.log(N / count) for tok, count in df.items()}
+
+
+_IDF = _build_idf(KNOWLEDGE_BASE)
 
 
 # ---------------------------------------------------------------------------
@@ -248,17 +281,18 @@ CPU-bound steps see ~85% parallel efficiency at workers=8.
 # ---------------------------------------------------------------------------
 
 def search_docs(query: str) -> str:
-    """Keyword search over KNOWLEDGE_BASE; return the top-2 matching passages."""
-    query_tokens = set(re.sub(r"[^\w\s]", "", query.lower()).split())
-    scores: list[tuple[int, str]] = []
+    """IDF-weighted search over KNOWLEDGE_BASE; return the top-3 matching passages."""
+    query_tokens = _tokenize(query)
+    scores: list[tuple[float, str]] = []
     for key, passage in KNOWLEDGE_BASE.items():
-        doc_tokens = set(re.sub(r"[^\w\s]", "", passage.lower()).split())
-        score = len(query_tokens & doc_tokens)
+        doc_tokens = _tokenize(passage)
+        # IDF-weighted overlap: rare terms count more than ubiquitous ones
+        score = sum(_IDF.get(t, 0.0) for t in query_tokens & doc_tokens)
         scores.append((score, key))
     scores.sort(reverse=True)
 
     results: list[str] = []
-    for score, key in scores[:2]:
+    for score, key in scores[:3]:
         if score > 0:
             results.append(f"[{key}]\n{KNOWLEDGE_BASE[key].strip()}")
 
@@ -266,10 +300,20 @@ def search_docs(query: str) -> str:
 
 
 def calculate(expression: str) -> str:
-    """Safely evaluate a numeric expression using Python arithmetic + math module."""
+    """
+    Safely evaluate a numeric or date expression.
+
+    Arithmetic examples:
+      "170_000 * 5400"              →  918000000
+      "10_000_000 / 88_000"         →  113.636...
+
+    Date-difference examples (use after calling get_date()):
+      "(datetime.date(2026,4,19) - datetime.date(2024,1,15)).days"  →  826
+    """
     safe_globals: dict[str, Any] = {
         "__builtins__": {},
         "math": math,
+        "datetime": datetime,
         "abs": abs,
         "round": round,
         "min": min,
@@ -303,14 +347,20 @@ TOOL_SCHEMAS = [
             "description": (
                 "Search the pyflow documentation. Use this for any question about "
                 "pyflow APIs, configuration, behaviour, version history, or "
-                "performance benchmarks."
+                "performance benchmarks. For throughput or capacity questions use "
+                "terms like 'throughput benchmark workers records per second'. "
+                "For version/release questions use 'version release date history'."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Keywords describing what to look up.",
+                        "description": (
+                            "Specific keywords to look up. Prefer pyflow-specific "
+                            "terms: 'throughput benchmark', 'workers', 'RetryPolicy', "
+                            "'CheckpointSink', 'KafkaSource', etc."
+                        ),
                     }
                 },
                 "required": ["query"],
@@ -322,9 +372,10 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "calculate",
             "description": (
-                "Evaluate a Python arithmetic expression. Use for any numerical "
-                "calculation: throughput estimates, time-to-completion, batch counts, "
-                "record capacities, etc."
+                "Evaluate a Python arithmetic or date expression. Use for any "
+                "numerical calculation (throughput, time-to-completion, batch counts, "
+                "record capacities) and for date differences after calling get_date(). "
+                "The datetime module is available for date arithmetic."
             ),
             "parameters": {
                 "type": "object",
@@ -332,8 +383,8 @@ TOOL_SCHEMAS = [
                     "expression": {
                         "type": "string",
                         "description": (
-                            "A valid Python arithmetic expression, e.g. "
-                            "'2_000_000 / 45_000' or '310_000 * 1800'."
+                            "A valid Python expression. Arithmetic: '170_000 * 5400'. "
+                            "Date diff: '(datetime.date(2026,4,19) - datetime.date(2024,1,15)).days'."
                         ),
                     }
                 },
