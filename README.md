@@ -441,6 +441,11 @@ pip install "aevyra-reflex[stats]"   # enables Wilcoxon test
 
 ## Choosing a reasoning model
 
+Reflex automatically detects the dominant language of your dataset (Chinese,
+Japanese, Korean, Arabic, Russian, etc.) and instructs the reasoning model to
+write all revised prompts and explanations in that language. No configuration
+required — it works out of the box with any reasoning model.
+
 ```bash
 # Ollama — local reasoning, nothing leaves your machine
 # Qwen3:8b is the recommended local reasoning model
@@ -571,7 +576,7 @@ aevyra-reflex optimize prompt.md \
 
 The judge evaluates the full trace text — all nodes, their inputs and outputs — so it can assess the pipeline end-to-end. Mark the node being optimized with `optimize=True` to highlight it in the trace output. No `add_provider()` call is needed; the pipeline handles its own model calls.
 
-Pipeline mode works with `iterative`, `structural`, and `auto` strategies. `pdo` is not yet supported — it uses a dueling architecture that's incompatible with trace-based eval. Pipeline mode is also mutually exclusive with `set_dataset()`; use one or the other.
+Pipeline mode works with all strategies including `pdo`. In PDO pipeline mode, duel pairs are evaluated by running the full pipeline with each candidate prompt and comparing scores directly — no LLM judge needed for the duel itself. Pipeline mode is mutually exclusive with `set_dataset()`; use one or the other.
 
 ## CLI reference
 

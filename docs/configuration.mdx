@@ -539,6 +539,16 @@ A more capable reasoning model produces better prompt rewrites.
   optimization axes to apply.
 </Note>
 
+<Note>
+  **Automatic language detection.** Reflex samples up to 20 user messages
+  from your training set and detects the dominant script family using Unicode
+  heuristics (no external dependencies). The reasoning model is then
+  instructed to write all revised prompts and diagnostic explanations in that
+  language. This prevents multilingual models such as Qwen3 from silently
+  switching languages mid-run when optimizing non-English datasets. No
+  configuration is required — the detection is automatic.
+</Note>
+
 ## Run persistence and checkpointing
 
 Reflex automatically saves every run to a `.reflex/` directory. Each
