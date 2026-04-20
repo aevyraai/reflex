@@ -13,21 +13,64 @@ answer.  This lets the model do multi-step reasoning: look up a throughput
 benchmark, then calculate how long a job will take, then compose a grounded
 answer.
 
+Provider selection
+------------------
+The pipeline works with any OpenAI-compatible endpoint.  Two ways to configure:
+
+1. Named provider shortcut (smoke test: --provider; reflex: PIPELINE_PROVIDER):
+
+   Provider       Env key needed          Default model
+   openrouter     OPENROUTER_API_KEY      qwen/qwen3-8b
+   ollama         (none)                  qwen3:8b
+   together       TOGETHER_API_KEY        Qwen/Qwen3-8B-Instruct-Turbo
+
+2. Fully custom endpoint (overrides provider defaults):
+
+   PIPELINE_BASE_URL=https://my-endpoint/v1
+   PIPELINE_MODEL=my-model
+   PIPELINE_API_KEY=my-key          # optional if endpoint is public
+
+For the smoke test, CLI flags mirror all env vars (see __main__ below).
+
 Usage
 -----
-    # Run a single question manually:
-    python examples/dev_assistant/pipeline.py "How many records can I process
-    in 2 hours with workers=4?"
-
-    # Run via reflex CLI (pipeline mode):
+    # Smoke test — OpenRouter (default):
     export OPENROUTER_API_KEY=sk-or-...
-    aevyra-reflex optimize \
-      --pipeline-file examples/dev_assistant/pipeline.py \
-      --inputs-file  examples/dev_assistant/questions.json \
-      examples/dev_assistant/prompt.md \
-      --judge openrouter/qwen/qwen3-8b \
-      --judge-criteria examples/dev_assistant/judge.md \
+    python examples/dev_assistant/pipeline.py \\
+      "How many records can I process in 2 hours with workers=4?"
+
+    # Smoke test — Ollama:
+    python examples/dev_assistant/pipeline.py --provider ollama \\
+      "How many records can I process in 2 hours with workers=4?"
+
+    # Smoke test — any custom endpoint:
+    python examples/dev_assistant/pipeline.py \\
+      --base-url https://my-endpoint/v1 --model my-model --api-key my-key \\
+      "How many records can I process in 2 hours with workers=4?"
+
+    # Reflex CLI — OpenRouter:
+    export OPENROUTER_API_KEY=sk-or-...
+    aevyra-reflex optimize \\
+      --pipeline-file examples/dev_assistant/pipeline.py \\
+      --inputs-file   examples/dev_assistant/questions.json \\
+      examples/dev_assistant/prompt.md \\
+      --judge openrouter/qwen/qwen3-8b \\
+      --judge-criteria examples/dev_assistant/judge.md \\
       -o examples/dev_assistant/best_prompt.md
+
+    # Reflex CLI — Ollama:
+    PIPELINE_PROVIDER=ollama aevyra-reflex optimize \\
+      --pipeline-file examples/dev_assistant/pipeline.py \\
+      --inputs-file   examples/dev_assistant/questions.json \\
+      examples/dev_assistant/prompt.md \\
+      --judge-criteria examples/dev_assistant/judge.md \\
+      -o examples/dev_assistant/best_prompt.md
+
+    # Reflex CLI — custom endpoint:
+    PIPELINE_BASE_URL=https://my-endpoint/v1 \\
+    PIPELINE_MODEL=my-model \\
+    PIPELINE_API_KEY=my-key \\
+    aevyra-reflex optimize ...
 """
 
 from __future__ import annotations
@@ -44,14 +87,79 @@ from openai import OpenAI
 from aevyra_reflex import AgentTrace, TraceNode
 
 # ---------------------------------------------------------------------------
-# OpenRouter client — Qwen3 8B
+# Provider registry and client initialisation
 # ---------------------------------------------------------------------------
 
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.environ["OPENROUTER_API_KEY"],
-)
-MODEL = "qwen/qwen3-8b"
+# Named shortcuts: (base_url, api_key_env_var, default_model)
+# api_key_env_var=None means no key is required (e.g. local Ollama).
+_PROVIDERS: dict[str, tuple[str, str | None, str]] = {
+    "openrouter": (
+        "https://openrouter.ai/api/v1",
+        "OPENROUTER_API_KEY",
+        "qwen/qwen3-8b",
+    ),
+    "ollama": (
+        "http://localhost:11434/v1",
+        None,           # no key required
+        "qwen3:8b",
+    ),
+    "together": (
+        "https://api.together.xyz/v1",
+        "TOGETHER_API_KEY",
+        "Qwen/Qwen3-8B-Instruct-Turbo",
+    ),
+}
+
+
+def _build_client(
+    provider: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+) -> tuple[OpenAI, str]:
+    """
+    Return (OpenAI client, model_name) from explicit args or env vars.
+
+    Resolution order (first non-None wins):
+      1. Explicit args passed to this function
+      2. PIPELINE_BASE_URL / PIPELINE_MODEL / PIPELINE_API_KEY env vars
+      3. Named provider (--provider flag or PIPELINE_PROVIDER env var)
+      4. Default: openrouter
+    """
+    provider = provider or os.environ.get("PIPELINE_PROVIDER", "openrouter")
+    if provider not in _PROVIDERS:
+        raise ValueError(
+            f"Unknown provider {provider!r}. "
+            f"Known providers: {list(_PROVIDERS)}. "
+            "Use --base-url / --model / --api-key for a custom endpoint."
+        )
+
+    p_base_url, p_key_env, p_default_model = _PROVIDERS[provider]
+
+    resolved_base_url = base_url or os.environ.get("PIPELINE_BASE_URL") or p_base_url
+    resolved_model    = model    or os.environ.get("PIPELINE_MODEL")    or p_default_model
+
+    if api_key:
+        resolved_key = api_key
+    elif os.environ.get("PIPELINE_API_KEY"):
+        resolved_key = os.environ["PIPELINE_API_KEY"]
+    elif p_key_env and os.environ.get(p_key_env):
+        resolved_key = os.environ[p_key_env]
+    elif p_key_env is None:
+        resolved_key = "none"   # local endpoints (Ollama) ignore the key
+    else:
+        raise EnvironmentError(
+            f"Provider '{provider}' requires an API key. "
+            f"Set {p_key_env} or pass --api-key."
+        )
+
+    return OpenAI(base_url=resolved_base_url, api_key=resolved_key), resolved_model
+
+
+# Initialised from env vars at import time (used by reflex pipeline mode).
+# The smoke-test __main__ block may overwrite these globals after parsing flags.
+client, MODEL = _build_client()
+
 MAX_TOOL_ROUNDS = 4  # maximum agentic rounds before forcing a final answer
 
 
@@ -520,23 +628,81 @@ def pipeline_fn(prompt: str, question: str) -> AgentTrace:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    _question = (
-        sys.argv[1]
-        if len(sys.argv) > 1
-        else (
+    _parser = argparse.ArgumentParser(
+        description="Dev assistant pipeline smoke test",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Provider examples:
+  # OpenRouter (default — needs OPENROUTER_API_KEY):
+  python pipeline.py "How long for 10M records at workers=4?"
+
+  # Ollama (local, no key needed):
+  python pipeline.py --provider ollama "How long for 10M records at workers=4?"
+
+  # Together AI (needs TOGETHER_API_KEY):
+  python pipeline.py --provider together "How long for 10M records at workers=4?"
+
+  # Any custom OpenAI-compatible endpoint:
+  python pipeline.py --base-url https://my-endpoint/v1 --model my-model \\
+    --api-key my-key "How long for 10M records at workers=4?"
+""",
+    )
+    _parser.add_argument(
+        "question",
+        nargs="?",
+        default=(
             "At workers=4, how many records can I process in 90 minutes, "
             "and what throughput does the documentation quote for that setting?"
-        )
+        ),
+        help="Question to ask the assistant (default: workers=4 capacity question)",
+    )
+    _parser.add_argument(
+        "--provider",
+        default=None,
+        choices=list(_PROVIDERS),
+        metavar="NAME",
+        help=f"Named provider shortcut: {list(_PROVIDERS)} (default: openrouter)",
+    )
+    _parser.add_argument(
+        "--base-url",
+        default=None,
+        metavar="URL",
+        help="OpenAI-compatible base URL (overrides --provider default)",
+    )
+    _parser.add_argument(
+        "--model",
+        default=None,
+        metavar="MODEL",
+        help="Model name (overrides --provider default)",
+    )
+    _parser.add_argument(
+        "--api-key",
+        default=None,
+        metavar="KEY",
+        help="API key (overrides env var lookup; not needed for Ollama)",
+    )
+    _args = _parser.parse_args()
+
+    # Rebuild client from flags — overwrites module-level globals so pipeline_fn
+    # picks up the new values (client and MODEL are looked up at call time).
+    client, MODEL = _build_client(
+        provider=_args.provider,
+        base_url=_args.base_url,
+        model=_args.model,
+        api_key=_args.api_key,
     )
 
     _prompt_path = os.path.join(os.path.dirname(__file__), "prompt.md")
     with open(_prompt_path) as _f:
         _prompt = _f.read().strip()
 
-    print(f"Question : {_question}\n")
-    trace = pipeline_fn(_prompt, _question)
+    print(f"Provider : {_args.provider or os.environ.get('PIPELINE_PROVIDER', 'openrouter')}")
+    print(f"Model    : {MODEL}")
+    print(f"Question : {_args.question}\n")
+
+    trace = pipeline_fn(_prompt, _args.question)
 
     print("=== tools_called ===")
     print(json.dumps(trace.nodes[0].output, indent=2))

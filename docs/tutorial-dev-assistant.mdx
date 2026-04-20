@@ -452,7 +452,10 @@ do not need a frontier judge for this.
 ## Run it yourself
 
 The pipeline, dataset, starting prompt, and judge rubric are in
-`examples/dev_assistant/`:
+`examples/dev_assistant/`. The pipeline works with any OpenAI-compatible
+provider — pick whichever you have credentials for.
+
+**OpenRouter** (cloud, needs `OPENROUTER_API_KEY`):
 
 ```bash
 pip install aevyra-reflex
@@ -470,10 +473,50 @@ aevyra-reflex optimize \
   -o examples/dev_assistant/best_prompt.md
 ```
 
+**Ollama** (local, no API key — run `ollama pull qwen3:8b` first):
+
+```bash
+PIPELINE_PROVIDER=ollama aevyra-reflex optimize \
+  --pipeline-file examples/dev_assistant/pipeline.py \
+  --inputs-file   examples/dev_assistant/questions.json \
+  examples/dev_assistant/prompt.md \
+  --judge-criteria examples/dev_assistant/judge.md \
+  --strategy auto \
+  --max-workers 2 \
+  -o examples/dev_assistant/best_prompt.md
+```
+
+**Any other OpenAI-compatible endpoint** (Together AI, vLLM, LM Studio, etc.):
+
+```bash
+PIPELINE_BASE_URL=https://api.together.xyz/v1 \
+PIPELINE_MODEL=Qwen/Qwen3-8B-Instruct-Turbo \
+PIPELINE_API_KEY=your-key \
+aevyra-reflex optimize \
+  --pipeline-file examples/dev_assistant/pipeline.py \
+  --inputs-file   examples/dev_assistant/questions.json \
+  examples/dev_assistant/prompt.md \
+  --judge-criteria examples/dev_assistant/judge.md \
+  --strategy auto \
+  -o examples/dev_assistant/best_prompt.md
+```
+
 Smoke-test the pipeline on a single question first:
 
 ```bash
+# OpenRouter
 python examples/dev_assistant/pipeline.py \
+  "At workers=4, how many records can I process in 90 minutes?"
+
+# Ollama
+python examples/dev_assistant/pipeline.py --provider ollama \
+  "At workers=4, how many records can I process in 90 minutes?"
+
+# Custom endpoint
+python examples/dev_assistant/pipeline.py \
+  --base-url https://api.together.xyz/v1 \
+  --model Qwen/Qwen3-8B-Instruct-Turbo \
+  --api-key your-key \
   "At workers=4, how many records can I process in 90 minutes?"
 ```
 
