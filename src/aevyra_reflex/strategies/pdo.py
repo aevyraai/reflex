@@ -59,7 +59,14 @@ class PDOStrategy(Strategy):
         on_iteration: Any | None = None,
         resume_state: dict | None = None,
         update_strategy_state: Any | None = None,
+        eval_fn: Any | None = None,
     ) -> OptimizationResult:
+        if eval_fn is not None:
+            raise NotImplementedError(
+                "Pipeline mode (set_pipeline) is not yet supported with the 'pdo' strategy. "
+                "Use strategy='iterative', 'structural', or 'auto' with set_pipeline()."
+            )
+
         pdo_config = _PDOConfig.from_optimizer_config(config)
 
         # Summarize the dataset so the agent understands the task

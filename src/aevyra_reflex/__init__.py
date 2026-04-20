@@ -24,12 +24,15 @@ from aevyra_reflex.optimizer import (
 from aevyra_reflex.result import OptimizationResult
 from aevyra_reflex.run_store import RunStore
 from aevyra_reflex.strategies import Strategy, register_strategy
+from aevyra_reflex.trace import AgentTrace, TraceNode
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "AgentTrace",
     "LLM",
     "MLflowCallback",
+    "TraceNode",
     "WandbCallback",
     "OptimizerConfig",
     "OptimizationResult",

@@ -91,6 +91,7 @@ class AutoStrategy(Strategy):
         on_iteration: Any | None = None,
         resume_state: dict[str, Any] | None = None,
         update_strategy_state: Any | None = None,
+        eval_fn: Any | None = None,
     ) -> OptimizationResult:
         extra = config.extra_kwargs or {}
         a_config = _AutoConfig(
@@ -279,6 +280,7 @@ class AutoStrategy(Strategy):
                 on_iteration=_phase_callback,
                 resume_state=sub_resume_state,
                 update_strategy_state=_sub_update_strategy_state,
+                eval_fn=eval_fn,
             )
             _phase_duration = _time.monotonic() - _phase_start
 
