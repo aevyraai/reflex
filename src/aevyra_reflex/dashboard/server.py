@@ -158,24 +158,66 @@ def _run_job(job_id: str, config_dict: dict[str, Any], store: RunStore, job: dic
             extra_kwargs=extra_kwargs,
         )
 
-        # ── Load dataset ──────────────────────────────────────────────────
-        ds_path = config_dict["dataset_path"]
-        try:
-            ds = Dataset.from_jsonl(ds_path)
-        except FileNotFoundError:
-            push("error", message=f"Dataset not found: {ds_path}")
-            return
-
         # ── Build optimizer ───────────────────────────────────────────────
         optimizer = PromptOptimizer(config=config)
-        optimizer.set_dataset(ds)
 
-        model_str = config_dict["model"]  # expected "provider/model"
-        parts = model_str.split("/", 1)
-        if len(parts) != 2:
-            push("error", message=f"Model must be in 'provider/model' format, got: {model_str!r}")
-            return
-        optimizer.add_provider(parts[0], parts[1])
+        # ── Pipeline mode vs Standard mode ───────────────────────────────
+        # config_dict may contain: pipeline_file, inputs_file (pipeline mode)
+        # or dataset_path, model (standard mode)
+        pipeline_file = config_dict.get("pipeline_file", "").strip()
+        inputs_file = config_dict.get("inputs_file", "").strip()
+
+        if pipeline_file:
+            # Pipeline mode: import user's Python file and call set_pipeline/set_inputs
+            import importlib.util as _ilu
+            import json as _json
+
+            if not inputs_file:
+                push("error", message="inputs_file is required in pipeline mode")
+                return
+
+            try:
+                spec = _ilu.spec_from_file_location("_user_pipeline", pipeline_file)
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+            except Exception as exc:
+                push("error", message=f"Failed to import pipeline file: {exc}")
+                return
+            if not hasattr(mod, "pipeline_fn"):
+                push("error", message="Pipeline file must define a pipeline_fn(prompt, input) -> AgentTrace function")
+                return
+
+            try:
+                _inputs_text = Path(inputs_file).read_text()
+                if inputs_file.endswith(".jsonl"):
+                    raw_inputs = [_json.loads(line) for line in _inputs_text.splitlines() if line.strip()]
+                else:
+                    raw_inputs = _json.loads(_inputs_text)
+                if not isinstance(raw_inputs, list):
+                    raise ValueError("inputs file must contain a JSON array")
+            except Exception as exc:
+                push("error", message=f"Failed to load inputs file: {exc}")
+                return
+
+            optimizer.set_pipeline(mod.pipeline_fn)
+            optimizer.set_inputs(raw_inputs)
+            push("queued", message=f"Pipeline mode: {len(raw_inputs)} inputs from {Path(inputs_file).name}")
+        else:
+            # Standard mode: load dataset and model
+            ds_path = config_dict["dataset_path"]
+            try:
+                ds = Dataset.from_jsonl(ds_path)
+            except FileNotFoundError:
+                push("error", message=f"Dataset not found: {ds_path}")
+                return
+            optimizer.set_dataset(ds)
+
+            model_str = config_dict["model"]  # expected "provider/model"
+            parts = model_str.split("/", 1)
+            if len(parts) != 2:
+                push("error", message=f"Model must be in 'provider/model' format, got: {model_str!r}")
+                return
+            optimizer.add_provider(parts[0], parts[1])
 
         judge_str = config_dict.get("judge", "").strip()
         if judge_str:
@@ -516,7 +558,12 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             return self._json_error(400, "Invalid JSON body")
 
-        for field in ("dataset_path", "prompt", "model"):
+        # In pipeline mode, dataset_path and model are not required
+        pipeline_file = config_dict.get("pipeline_file", "").strip()
+        required_fields = ["prompt"]
+        if not pipeline_file:
+            required_fields += ["dataset_path", "model"]
+        for field in required_fields:
             if not config_dict.get(field, "").strip():
                 return self._json_error(400, f"Missing required field: {field}")
 
