@@ -1,0 +1,122 @@
+[
+  {
+    "question": "How do I configure retry logic for failed pipeline steps?",
+    "ideal": "Use RetryPolicy(max_attempts=3, backoff_factor=2.0). Pass it to Pipeline(retry=RetryPolicy(...)). Set retry_on=[ExceptionType] to target specific errors, or omit it to retry on any exception."
+  },
+  {
+    "question": "What is the difference between map() and flat_map() in pyflow?",
+    "ideal": "map() applies a function to each element and returns one output per input. flat_map() applies a function that returns a list and flattens the results into a single stream. Use flat_map() when your transform produces variable-length output."
+  },
+  {
+    "question": "How do I write pipeline output to a partitioned Parquet table?",
+    "ideal": "Use ParquetSink with partition_by=['column_name']. Example: pipeline.sink(ParquetSink(path='output/', partition_by=['date', 'region'])). Partitions are created automatically."
+  },
+  {
+    "question": "Can I run pyflow pipelines in parallel across multiple CPU cores?",
+    "ideal": "Yes. Set workers=N in Pipeline() to run steps in parallel using a process pool. Example: Pipeline(workers=4). For IO-bound steps, use workers='auto' to default to 2× CPU count."
+  },
+  {
+    "question": "How do I handle schema mismatches when reading mixed-format data?",
+    "ideal": "Use SchemaCoercionPolicy. Set on_mismatch='cast' to attempt type coercion, 'drop' to skip mismatched rows, or 'raise' (default) to fail fast. Pass it as Pipeline(schema_policy=SchemaCoercionPolicy(on_mismatch='cast'))."
+  },
+  {
+    "question": "What checkpointing options are available to resume interrupted runs?",
+    "ideal": "Use CheckpointSink(path='.pyflow_cache/', every_n=100) to write periodic checkpoints. On restart, pyflow detects the checkpoint and skips already-processed records. Set every_n to control checkpoint frequency."
+  },
+  {
+    "question": "How do I filter records in the middle of a pipeline?",
+    "ideal": "Chain .filter(predicate_fn) after any step. The function receives one record and should return True to keep it. Example: pipeline.filter(lambda r: r['status'] == 'active'). Filtered records are dropped entirely, not buffered."
+  },
+  {
+    "question": "Can I join two data streams in a single pipeline?",
+    "ideal": "Use pipeline.join(other_pipeline, on='key_field', how='inner'). Supported join types: inner, left, right, outer. Both pipelines must be finalized (no pending steps) before joining."
+  },
+  {
+    "question": "How do I add custom metrics tracking to pipeline execution?",
+    "ideal": "Implement the MetricsCollector interface and pass it via Pipeline(metrics=MyCollector()). pyflow calls on_record(record, step_name) after each step and on_pipeline_end(summary) at completion."
+  },
+  {
+    "question": "What is the maximum recommended batch size for in-memory aggregation?",
+    "ideal": "The documentation does not specify a single recommended value. Batch size depends on available memory and record size. The docs recommend starting with 1000 and profiling with Pipeline(batch_size=1000, profile=True)."
+  },
+  {
+    "question": "How do I read from a Kafka topic as a pipeline source?",
+    "ideal": "Use KafkaSource(topic='my-topic', bootstrap_servers='localhost:9092', group_id='my-group'). Optionally set auto_offset_reset='earliest' to reprocess from the start of the topic."
+  },
+  {
+    "question": "Is there a built-in way to deduplicate records by a field?",
+    "ideal": "Use pipeline.deduplicate(key='field_name'). By default, the first occurrence is kept; set keep='last' to keep the most recent. For large streams, set window=10000 to limit deduplication to the last N records."
+  },
+  {
+    "question": "How do I test a pipeline step in isolation without running the full pipeline?",
+    "ideal": "Use StepHarness: harness = StepHarness(my_step_fn). Then call harness.run([record1, record2]) to test inputs and inspect harness.output. StepHarness captures exceptions and timing per record."
+  },
+  {
+    "question": "What happens to records that raise exceptions in a pipeline step?",
+    "ideal": "By default, exceptions propagate and halt the pipeline. Set on_error='skip' to drop failing records with a warning, or on_error='dead_letter' to route them to a DeadLetterSink for manual inspection."
+  },
+  {
+    "question": "How do I add a watermark to handle late-arriving events in streaming mode?",
+    "ideal": "Use pipeline.watermark(event_time_field='ts', max_lateness_seconds=30). Records arriving more than 30 seconds after the watermark are dropped by default. Set on_late='emit' to still process them."
+  },
+  {
+    "question": "Can I use pyflow with async functions?",
+    "ideal": "Yes. Decorate async step functions with @async_step and pyflow will run them in an asyncio event loop per worker. Mix sync and async steps freely; pyflow handles the event loop lifecycle."
+  },
+  {
+    "question": "How do I log the number of records processed at each step?",
+    "ideal": "Enable step-level counters with Pipeline(log_step_counts=True). Counts are printed at pipeline completion and accessible via result.step_counts. For live monitoring, attach a MetricsCollector."
+  },
+  {
+    "question": "What serialization formats does pyflow support for inter-step communication?",
+    "ideal": "pyflow supports msgpack (default, fastest), json (human-readable), and pickle (Python objects). Set via Pipeline(serialization='json'). msgpack is recommended for production; json for debugging."
+  },
+  {
+    "question": "How do I configure connection pooling for database sink writes?",
+    "ideal": "Pass pool_size and max_overflow to DatabaseSink: DatabaseSink(url='postgresql://...', pool_size=5, max_overflow=10). These map directly to SQLAlchemy's create_engine() pool settings."
+  },
+  {
+    "question": "Is there a way to preview the first N records without running the full pipeline?",
+    "ideal": "Use pipeline.preview(n=10). This runs the pipeline in dry-run mode, stopping after n records pass through all steps. Returns a list of records and step-level timing. Does not write to any sinks."
+  },
+  {
+    "question": "How do I enforce a timeout on individual pipeline steps?",
+    "ideal": "Use @step(timeout_seconds=30) on your step function. If execution exceeds the timeout, pyflow raises StepTimeoutError. Combined with on_error='skip' this drops timed-out records without halting the pipeline."
+  },
+  {
+    "question": "Can I run the same pipeline with different configs without redefining it?",
+    "ideal": "Yes. Define a pipeline factory function or use Pipeline.clone(config_overrides). Example: pipeline.clone({'workers': 8, 'batch_size': 500}) returns a new Pipeline with overridden settings and the same steps."
+  },
+  {
+    "question": "How does pyflow handle backpressure when a downstream step is slow?",
+    "ideal": "pyflow uses bounded queues between steps. When a downstream queue fills, upstream steps pause automatically. Set queue_size=N in Pipeline() to control buffer size. Default is 1000 per step."
+  },
+  {
+    "question": "How do I output debug information for a specific step?",
+    "ideal": "Wrap the step with debug_step(): pipeline.map(debug_step(my_fn, sample_rate=0.1)). This logs 10% of records (input, output, latency) at DEBUG level. Set sample_rate=1.0 to log every record."
+  },
+  {
+    "question": "What does the pipeline.profile() method return?",
+    "ideal": "pipeline.profile() returns a ProfilingReport with per-step metrics: records_in, records_out, avg_latency_ms, p99_latency_ms, and error_count. Also includes a bottleneck property pointing to the slowest step."
+  },
+  {
+    "question": "How do I run a side effect (e.g. send an alert) without affecting pipeline records?",
+    "ideal": "Use pipeline.tap(side_effect_fn). The function receives each record but its return value is discarded; the original record passes through unchanged. Use for logging, alerting, or metrics emission."
+  },
+  {
+    "question": "Does pyflow support branching where one record triggers multiple output paths?",
+    "ideal": "Yes. Use pipeline.branch(condition_fn, true_pipeline, false_pipeline). Records where condition_fn returns True are routed to true_pipeline; others to false_pipeline. Both branches can have different sinks."
+  },
+  {
+    "question": "How do I limit the rate at which a pipeline consumes records?",
+    "ideal": "Use Pipeline(rate_limit=100) to cap throughput at 100 records per second. For burst control, set rate_limit=(100, 500) as (sustained_rps, burst_rps). Rate limiting applies globally across all workers."
+  },
+  {
+    "question": "What are the memory limits for windowed aggregation in streaming mode?",
+    "ideal": "pyflow does not impose hard memory limits on windows. The docs recommend keeping window sizes below 100k records per key to avoid GC pressure. Use CheckpointSink to spill large state to disk for windows exceeding this."
+  },
+  {
+    "question": "How do I implement a custom source that reads from a proprietary API?",
+    "ideal": "Subclass BaseSource and implement __iter__: yield one record dict per call. Register it with @register_source('my_source'). Then use it like any built-in source: MySource(api_key='...', endpoint='...')."
+  }
+]

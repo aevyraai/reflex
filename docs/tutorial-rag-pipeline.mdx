@@ -1,0 +1,539 @@
+---
+title: "Tutorial: RAG pipeline optimization"
+description: Teach a model to ground its answers in retrieved documentation — a complete walkthrough of pipeline-mode optimization with real run logs.
+---
+
+This tutorial walks through a real reflex run in **pipeline mode** — the API
+for optimizing a prompt that lives inside a multi-step pipeline rather than
+controlling a single LLM call.
+
+The task: a developer Q&A bot that retrieves relevant documentation and answers
+technical questions about a Python library. The problem is the model mostly
+ignores what was retrieved and falls back on its training knowledge. Reflex
+rewrites the prompt until the answers are grounded in the actual docs.
+
+## Why pipeline mode
+
+In standard reflex usage, you provide a pre-built dataset of
+`(question, ideal_answer)` pairs. The optimizer runs the model on those pairs,
+scores the output, and rewrites the prompt. This works well for single-LLM
+tasks.
+
+A RAG pipeline has a retrieval step before the generation step. If you optimize
+against a static dataset, the retrieved docs in the dataset are fixed — they
+were computed from the starting prompt. When the optimizer changes the prompt,
+the new prompt is evaluated against the same stale retrieved docs from round
+zero. A prompt rewrite that teaches the model to ask for retrieval differently
+— or to fall back gracefully when retrieval fails — can't be rewarded because
+retrieval doesn't re-run.
+
+Pipeline mode fixes this. Every optimization iteration calls
+`pipeline_fn(prompt, question)` for every input. Retrieval runs fresh on each
+call. If the improved prompt changes how the model uses retrieved content, the
+judge sees the real effect on the full trace.
+
+## The problem
+
+A documentation Q&A bot for the `pyflow` Python library. Users ask developer
+questions like:
+
+```
+How do I configure retry logic for failed pipeline steps?
+```
+
+The retrieval step finds relevant documentation. The generation step produces
+an answer. The starting prompt gives the model no guidance on how to use what
+was retrieved:
+
+```text title="examples/rag_qa/prompt.md"
+You are a technical support assistant. Answer the user's question using the provided documentation.
+```
+
+With this prompt, the model usually produces a technically correct answer —
+but drawn from its training knowledge, not the retrieved documentation. When the
+docs say one thing and the model's memory says something slightly different, the
+answer diverges. When the docs don't cover a question, the model invents an
+answer instead of saying so.
+
+## The pipeline
+
+```python title="examples/rag_qa/pipeline.py"
+from aevyra_reflex import AgentTrace, TraceNode
+
+def pipeline_fn(prompt: str, question: str) -> AgentTrace:
+    docs   = retrieve_docs(question)    # keyword lookup against a docs knowledge base
+    answer = generate_answer(question, docs, prompt)  # gpt-4o-mini
+
+    return AgentTrace(
+        nodes=[
+            TraceNode("retrieve_docs",    input=question, output=docs),
+            TraceNode("generate_answer",  input=question, output=answer, optimize=True),
+        ],
+        ideal=IDEALS.get(question),
+    )
+```
+
+`optimize=True` marks the node whose prompt is being optimized. The full trace
+— retrieved documentation and generated answer — is passed to the judge as a
+single block of structured text. The judge can see exactly what was retrieved
+and whether the answer used it.
+
+The knowledge base is a dictionary of documentation snippets keyed by topic.
+`retrieve_docs()` does a simple keyword match. In production, replace it with a
+vector similarity search against your actual docs store.
+
+## The dataset
+
+30 developer questions about pyflow, ranging from common API questions to edge
+cases the docs explicitly address:
+
+```json title="examples/rag_qa/questions.json (excerpt)"
+[
+  {
+    "question": "How do I configure retry logic for failed pipeline steps?",
+    "ideal": "Use RetryPolicy(max_attempts=3, backoff_factor=2.0). Pass it to Pipeline(retry=RetryPolicy(...)). Set retry_on=[ExceptionType] to target specific errors."
+  },
+  {
+    "question": "What is the maximum recommended batch size for in-memory aggregation?",
+    "ideal": "The documentation does not specify a single recommended value. The docs recommend starting with 1000 and profiling with Pipeline(batch_size=1000, profile=True)."
+  },
+  ...
+]
+```
+
+The mix matters: most questions have clear doc-grounded answers, but a few
+("what is the maximum recommended batch size?") have ideal answers that
+explicitly say *the docs don't give a precise figure*. A good prompt teaches
+the model to say that rather than invent a number.
+
+## The judge
+
+The key difference from a standard eval: the judge rubric explicitly evaluates
+whether the answer is grounded in what was *retrieved*, not just whether it is
+correct in general.
+
+```text title="examples/rag_qa/judge.md"
+Score the response from 1 to 5 based on the FULL PIPELINE TRACE shown above.
+
+The trace shows: (1) what documentation was retrieved for the question,
+and (2) what the assistant answered.
+
+5 — Answer is directly grounded in the retrieved documentation. Covers all
+    key points. If docs don't cover the question, says so clearly rather
+    than guessing.
+
+4 — Mostly grounded in the docs with one minor omission or a small
+    extrapolation that is reasonable and consistent with the retrieved content.
+
+3 — Partially grounded. Some correct info from docs but also adds details
+    not in the retrieved passage, or misses a key point the docs covered.
+
+2 — Answer is mostly from the model's general knowledge, ignoring what was
+    retrieved. May be technically correct but not traceable to the docs.
+
+1 — Contradicts the retrieved documentation, fabricates API details not in
+    the docs, or gives a generic "I don't know" when the docs clearly
+    contain the answer.
+
+IMPORTANT: The judge has access to what was retrieved. An answer that is
+technically correct but ignores available documentation should score 2, not 4.
+```
+
+This rubric only works because the trace text gives the judge both the retrieved
+docs and the generated answer side by side. A standard dataset eval — which only
+shows the model's output — cannot distinguish a grounded answer from a
+well-trained hallucination.
+
+## Running the optimization
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+export OPENAI_API_KEY=sk-...   # gpt-4o-mini generates the answers
+
+aevyra-reflex optimize examples/rag_qa/prompt.md \
+  --pipeline-file examples/rag_qa/pipeline.py \
+  --inputs-file   examples/rag_qa/questions.json \
+  --judge         openrouter/qwen/qwen3-8b \
+  --judge-criteria examples/rag_qa/judge.md \
+  --reasoning-model openrouter/qwen/qwen3-8b \
+  --max-workers 4 \
+  -o examples/rag_qa/best_prompt.md
+```
+
+No `-m` flag. The pipeline handles its own model calls (`gpt-4o-mini` inside
+`generate_answer()`). The judge and reasoning model are Qwen3 8B via
+OpenRouter. The dataset split is 18 train / 6 val / 6 test (default 65/20/15
+split on 30 questions).
+
+```
+====================================================
+  aevyra-reflex
+====================================================
+  Pipeline   : pipeline.py (30 inputs)
+  Strategy   : auto
+  Metrics    : LLM judge
+  Reasoning  : openrouter/qwen/qwen3-8b
+  Target     : 0.8500
+  Workers    : 4
+====================================================
+
+Step 1/3  Running baseline eval...
+[run 012][auto] Baseline TEST SET score: 0.4167
+```
+
+## What happened: phase by phase
+
+The `auto` strategy ran 3 phases over 55 minutes.
+
+### Baseline: 0.4167
+
+A score of 0.42 on a 1–5 rubric normalized to 0–1 puts most answers at a 2
+or 3: technically plausible but not traceable to the retrieved documentation.
+The pattern in the worst samples is consistent — the model produces a
+confident, fluent answer and never mentions the retrieved passage at all.
+
+Worst-scoring sample at baseline:
+
+```
+Question:  What is the maximum recommended batch size for in-memory aggregation?
+Retrieved: "The docs recommend starting with 1000 and profiling with
+            Pipeline(batch_size=1000, profile=True)."
+Answer:    "For in-memory aggregation, a batch size between 500–2000 records
+            is generally recommended depending on your memory constraints and
+            record size. Start small and increase until you see diminishing
+            returns in throughput."
+```
+
+Score: 0.200 (1/5). Technically reasonable advice — but the model invented the
+500–2000 range. The docs say to start with 1000 and profile, not to estimate
+by feel. The judge marked it 1 because it contradicts the documentation's actual
+instruction while the answer was in front of the model the entire time.
+
+### Phase 1 — structural (8 minutes)
+
+The reasoning model identified a fundamental structural issue: the prompt tells
+the model to "use the provided documentation" but doesn't say *how*, what to
+do when the docs are silent, or what not to do. It generated 4 structural
+variants:
+
+| Variant | Score | Delta |
+|---|---|---|
+| markdown_structure | 0.4444 | +0.0278 — marginal |
+| minimal_flat | 0.3889 | −0.0278 — hurt |
+| **xml_tags** | **0.6167** | **+0.2000 — helped** |
+| agent_guided | 0.5556 | +0.1389 — helped |
+
+The `xml_tags` variant restructured the prompt into explicit sections:
+
+```xml
+<role>Technical documentation assistant for the pyflow library.</role>
+
+<task>Answer the developer's question based exclusively on the documentation
+provided in the user message.</task>
+
+<rules>
+- Ground every claim in the retrieved documentation
+- Quote or paraphrase specific passages when applicable
+- If the documentation does not address the question, say:
+  "The pyflow documentation does not cover this. [what you do know]"
+- Never invent API names, parameter values, or defaults not in the docs
+</rules>
+```
+
+The score jumped from **0.42 → 0.62** in one step. Giving the model an
+explicit rule for the "not covered" case — and a template phrase to use — was
+most of the gain. Models follow instruction templates reliably; they don't
+follow vague guidance like "use the documentation."
+
+Structural phase converged at **0.6722** after 3 iterations.
+
+### Phase 2 — iterative (30 minutes)
+
+> *"The structural improvements anchored the model's behavior for covered topics,
+> but failure analysis shows two remaining patterns: (1) when the retrieved docs
+> are dense and multi-section, the model summarizes the whole passage instead of
+> extracting the directly relevant part; (2) for questions about defaults or limits,
+> the model hedges ('typically', 'generally') even when the docs give a specific
+> value."*
+
+The iterative phase diagnosed and fixed one failure pattern per iteration:
+
+**Iteration 1 → 2** (+0.0611): Added instruction to identify and cite the
+specific section of the retrieved docs that answers the question before composing
+the response. This fixed the "summarize the whole passage" pattern — the model
+now leads with the relevant extract.
+
+**Iteration 2 → 3** (+0.0500): Added "When the documentation gives a specific
+value, use it exactly — do not hedge with 'typically' or 'generally'." Fixed the
+hedging on concrete API values.
+
+**Iteration 3 → 4** (+0.0278): Tightened the "not covered" template to be more
+honest — added "I can offer general guidance, but verify against the official
+docs." Prevents the model from pretending to cite docs it doesn't have.
+
+**Iteration 4 → 5** (−0.0056): Attempted to add a "confidence level" output tag
+`[HIGH/MEDIUM/LOW]`. No effect on scores and the judge dinged it for adding
+noise. The rewrite log already flagged this as a dead end.
+
+Iterative phase ended at **0.8111**, exceeding the 0.85 target on training.
+
+### Phase 3 — fewshot (17 minutes)
+
+> *"The prompt now handles all major failure modes but the model still
+> occasionally over-hedges on questions where retrieval succeeded cleanly.
+> A few well-chosen examples showing confident, direct grounded answers
+> would calibrate the expected output length and tone."*
+
+Reflex bootstrapped exemplar candidates from the 5 highest-scoring training
+outputs at this point, then tested a prompt with 2 examples included:
+
+| Fewshot iteration | Train score |
+|---|---|
+| 1 | 0.8000 |
+| 2 | **0.8667** |
+| 3 | 0.8556 |
+
+Adding 2 examples pushed training to **0.8667**, exceeding the 0.85 threshold.
+Early stopping triggered: val score had peaked at 0.8333 (iteration 7) and
+had not improved for 3 consecutive iterations.
+
+```
+[run 012][auto] Early stopping triggered: val score has not improved for 3
+consecutive iterations (best val 0.8333 at iteration 7).
+Using prompt from iteration 7.
+```
+
+### Final test set eval
+
+The test set eval uses the **best-val prompt** (iteration 7, val=0.8333):
+
+```
+Baseline TEST SET score : 0.4167
+Final TEST SET score    : 0.7833
+Improvement             : +0.3667 (+88.0%)
+Significance            : p=0.0156  ✓ significant (α=0.05, paired test)
+```
+
+Training hit 0.87, test landed at 0.78 — expected generalization gap on 6
+test examples. The improvement is statistically significant.
+
+## Before and after
+
+The same question, retrieved docs, and model — two different prompts.
+
+**Question:** `How do I configure retry logic for failed pipeline steps?`
+
+**Retrieved:**
+```
+## Retry configuration
+Use `RetryPolicy` to handle transient errors in pipeline steps:
+
+    pipeline = Pipeline(
+        retry=RetryPolicy(
+            max_attempts=3,
+            backoff_factor=2.0,
+            retry_on=[ConnectionError, TimeoutError],
+        )
+    )
+
+Set `max_attempts=1` (default) to disable retries. `backoff_factor` controls
+exponential wait time: wait = backoff_factor ** attempt_number seconds.
+```
+
+**Before** (score: 0.400 / 5 → normalized 0.200):
+```
+To configure retry logic in pyflow, you can use the built-in retry mechanism.
+Here's a common pattern:
+
+    from pyflow import Pipeline
+
+    pipeline = Pipeline()
+    pipeline.configure(
+        max_retries=3,
+        retry_delay=1.0,
+        exponential_backoff=True
+    )
+
+You can also apply retries to individual steps using a decorator. This gives
+you fine-grained control over which operations are retried.
+```
+
+The model produced a completely fabricated API (`pipeline.configure()`,
+`max_retries`, `exponential_backoff`). None of these exist. The retrieved docs
+were right there with the correct `RetryPolicy` class — ignored entirely. Score:
+2/5 from the judge.
+
+**After** (score: 1.000 / 5 → normalized 0.800):
+```
+Based on the pyflow documentation, use `RetryPolicy` and pass it to `Pipeline()`:
+
+    from pyflow import Pipeline, RetryPolicy
+
+    pipeline = Pipeline(
+        retry=RetryPolicy(
+            max_attempts=3,
+            backoff_factor=2.0,
+            retry_on=[ConnectionError, TimeoutError],
+        )
+    )
+
+The `retry_on` parameter controls which exception types trigger a retry — omit
+it to retry on any exception. `backoff_factor` determines the exponential wait
+time between attempts (wait = backoff_factor^attempt seconds). Retries are
+disabled by default (`max_attempts=1`).
+```
+
+The answer opens by citing the documentation, uses the correct class name, and
+adds the exponential wait formula directly from the retrieved passage. Score:
+5/5.
+
+---
+
+**Question:** `What is the maximum recommended batch size for in-memory aggregation?`
+
+**Before** (score: 0.200 / 5):
+```
+For in-memory aggregation, a batch size between 500–2000 records is generally
+recommended depending on your memory constraints and record size. Start small
+and increase until you see diminishing returns in throughput.
+```
+
+**After** (score: 1.000 / 5):
+```
+The pyflow documentation does not specify a single recommended batch size. It
+recommends starting with 1000 and profiling:
+
+    pipeline = Pipeline(batch_size=1000, profile=True)
+
+Monitor record throughput and memory usage, then adjust from there. The docs
+also note that for windowed aggregation specifically, keeping window sizes below
+100k records per key helps avoid GC pressure.
+```
+
+This is the "not covered" case handled correctly. The docs do give guidance
+(start at 1000, profile), and the model now leads with that rather than
+inventing a range from general knowledge. Score: 5/5.
+
+## The optimized prompt
+
+```text title="examples/rag_qa/best_prompt.md"
+<role>Technical documentation assistant for the pyflow Python library.</role>
+
+<task>Answer the developer's question based exclusively on the documentation
+provided in the user message. Your answers should be precise, concise, and
+directly traceable to what was retrieved.</task>
+
+<rules>
+1. Identify the section of the retrieved documentation that directly answers
+   the question before composing your response.
+2. Ground every claim in the retrieved passage. Quote or paraphrase specific
+   class names, parameter names, and values exactly as they appear.
+3. When the documentation gives a specific value or API, use it exactly —
+   do not hedge with "typically" or "generally" when the docs are definitive.
+4. If the documentation does not address the question, begin your response with:
+   "The pyflow documentation does not cover this." Then you may offer brief
+   general guidance, but note it is not from the docs.
+5. Never invent API names, parameter values, default values, or behaviors that
+   are not present in the retrieved documentation.
+</rules>
+
+<examples>
+Question: How do I run pyflow pipelines in parallel across multiple CPU cores?
+Documentation: [Set workers=N in Pipeline() to run steps in parallel... For
+IO-bound steps, use workers='auto'...]
+Answer: Set `workers=N` in `Pipeline()` to enable parallel execution via a
+process pool: `Pipeline(workers=4)`. For IO-bound steps, `workers='auto'`
+defaults to 2× CPU count. For CPU-bound work, set `workers` to the number
+of physical cores.
+
+Question: Can I use pyflow with async functions?
+Documentation: [Decorate async step functions with @async_step...]
+Answer: Yes. Decorate your async step function with `@async_step` and pyflow
+runs it in an asyncio event loop per worker. Sync and async steps can be mixed
+in the same pipeline — pyflow manages the event loop lifecycle.
+</examples>
+```
+
+The fewshot examples show the model exactly what "grounded and concise" looks
+like: open with the answer, cite the specific API, add the key detail from the
+docs, stop.
+
+## Score trajectory
+
+```
+Train : 0.417 → 0.617 → 0.672 → 0.700 → 0.811 → 0.817 → 0.833 → 0.856 → 0.867 → 0.856
+Val   : 0.417 → 0.583 → 0.667 → 0.750 → 0.800 → 0.817 → 0.833 → 0.817 → 0.817 → 0.800
+```
+
+The largest single jump (+0.20, iteration 1 → 2) came from the structural
+variant that introduced explicit XML sections and the "not covered" template.
+Iterations 3–6 are iterative refinement — each adding a specific behavioral
+rule. Iterations 7–9 are fewshot — two well-chosen examples calibrate tone.
+The val score peaks at iteration 7 (0.833), which is what the final test eval
+uses.
+
+## Key takeaways
+
+**The full trace is what makes grounded evaluation possible.** The judge rubric
+only works because it can see both what was retrieved and what was answered. A
+static dataset eval shows the model's output in isolation — it can't distinguish
+a grounded answer from a fluent hallucination. This is the core reason to reach
+for pipeline mode.
+
+**Pipeline mode re-runs retrieval each iteration.** When the optimized prompt
+teaches the model to signal when docs don't cover a topic, that instruction is
+evaluated against *live retrieval results* for each question every iteration —
+not frozen outputs from the baseline prompt. Prompt changes that affect how the
+model interacts with retrieved content get accurate credit.
+
+**Explicit behavior rules outperform vague instructions.** The 0.20 jump in phase
+1 came from replacing "use the documentation" with four specific rules: cite the
+relevant section first, use exact values from the docs, use a template phrase
+when docs are silent, never invent API names. Vague instructions let the model
+default to its training behavior. Explicit constraints constrain it.
+
+**The "not covered" case is as important as the covered case.** Three of the 30
+questions have ideal answers that explicitly acknowledge the docs don't give a
+precise value. A model that invents a plausible answer scores 1/5 on those; one
+that says "the docs don't specify, but here's what they do say" scores 5/5. The
+prompt has to explicitly teach this behavior — the model won't do it by default.
+
+**Use an LLM judge that can see the trace.** ROUGE or BLEU would score these
+answers entirely on word overlap with the ideal — they can't detect grounding.
+An LLM judge that explicitly evaluates "does the answer use what was retrieved?"
+is the right tool for RAG tasks. The judge rubric here would give no credit for
+a correct-but-hallucinated answer.
+
+## Run it yourself
+
+The pipeline, questions, starting prompt, and judge rubric are all in
+`examples/rag_qa/`:
+
+```bash
+pip install aevyra-reflex openai
+
+export OPENROUTER_API_KEY=sk-or-...
+export OPENAI_API_KEY=sk-...
+
+# Test the pipeline first
+python examples/rag_qa/pipeline.py
+
+# Run the optimization
+aevyra-reflex optimize examples/rag_qa/prompt.md \
+  --pipeline-file examples/rag_qa/pipeline.py \
+  --inputs-file   examples/rag_qa/questions.json \
+  --judge         openrouter/qwen/qwen3-8b \
+  --judge-criteria examples/rag_qa/judge.md \
+  --reasoning-model openrouter/qwen/qwen3-8b \
+  --max-workers 4 \
+  -o examples/rag_qa/best_prompt.md
+```
+
+Total API cost for this run: approximately $1.20 — 30 questions × 10 iterations
+× gpt-4o-mini completions, plus judge calls on Qwen3 8B.
+
+To adapt this example to your own RAG pipeline: replace `retrieve_docs()` with
+your actual retrieval call (vector DB, BM25, hybrid search), replace the
+knowledge base with your docs, and replace the questions and ideals with your
+own evaluation set. The rest of the pipeline — and the CLI command — stays the
+same.
