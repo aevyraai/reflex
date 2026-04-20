@@ -477,7 +477,7 @@ async function renderRunsList(silent = false) {
       el('h2', null, 'No runs yet'),
       el('p', { style: { marginBottom: '16px' } }, 'Start your first optimization run from the UI or the CLI:'),
       el('button', { class: 'btn btn-primary', style: { marginBottom: '16px' }, onClick: () => { location.hash = '/new'; } }, '+ New Run'),
-      el('p', null, el('code', null, 'aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b ))
+      el('p', null, el('code', null, 'aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b'))
     ));
     return;
   }

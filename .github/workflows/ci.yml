@@ -32,12 +32,38 @@ jobs:
         run: ruff check src/ tests/
 
   # ---------------------------------------------------------------------------
+  # Dashboard JS syntax — extracts the <script> block from app.html and runs
+  # node --check to catch syntax errors like unterminated strings
+  # ---------------------------------------------------------------------------
+  dashboard-js:
+    name: Dashboard JS syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check JS syntax
+        run: |
+          python3 -c "
+import re, sys, pathlib
+html = pathlib.Path('src/aevyra_reflex/dashboard/app.html').read_text()
+match = re.search(r'<script>(.*?)</script>', html, re.DOTALL)
+if not match:
+    print('ERROR: No <script> block found in app.html')
+    sys.exit(1)
+pathlib.Path('/tmp/dashboard.js').write_text(match.group(1))
+print(f'Extracted {len(match.group(1))} chars of JS from app.html')
+"
+          node --check /tmp/dashboard.js
+          echo "Dashboard JS syntax OK"
+
+  # ---------------------------------------------------------------------------
   # Unit tests — no API keys or services needed, always runs
   # ---------------------------------------------------------------------------
   unit:
     name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [lint, dashboard-js]
 
     strategy:
       fail-fast: false
