@@ -543,14 +543,20 @@ automatically for label-free datasets.
 Use this when the prompt lives inside a multi-step agent pipeline — classify → retrieve → generate — rather than controlling a single LLM call. Standard mode scores a string against an ideal; it cannot see whether the agent called the right tools or grounded its answer in retrieved context. Pipeline mode fixes this by re-running the full pipeline on every optimization iteration with the current candidate prompt, so the judge evaluates the complete execution trace — tool calls, intermediate outputs, and the final answer — not just the string that comes out at the end.
 
 ```python
+# ── your existing pipeline — no changes needed ──────────────────────────
+def classify_ticket(ticket: str) -> str: ...
+def retrieve_policy(ticket_type: str) -> str: ...
+def generate_response(ticket: str, policy: str, prompt: str) -> str: ...
+
+# ── the only thing you add: a thin wrapper ───────────────────────────────
 from aevyra_reflex import PromptOptimizer, AgentTrace, TraceNode
 from aevyra_verdict import LLMJudge
 from aevyra_verdict.providers import OpenRouterProvider
 
 def run_pipeline(prompt: str, ticket: str) -> AgentTrace:
-    ticket_type = classify_ticket(ticket)            # your existing code
+    ticket_type = classify_ticket(ticket)
     policy      = retrieve_policy(ticket_type)
-    response    = generate_response(ticket, policy, prompt)  # prompt controls this node
+    response    = generate_response(ticket, policy, prompt)
 
     return AgentTrace(
         nodes=[
@@ -564,9 +570,9 @@ def run_pipeline(prompt: str, ticket: str) -> AgentTrace:
 result = (
     PromptOptimizer()
     .set_pipeline(run_pipeline)
-    .set_inputs(tickets)          # list of raw inputs
+    .set_inputs(tickets)
     .add_metric(LLMJudge(
-        judge_provider=OpenRouterProvider(model="qwen/qwen3-8b"),
+        judge_provider=OpenRouterProvider(model="qwen/qwen3-30b-a3b"),
         criteria="Score the full pipeline trace: classification accuracy, policy retrieval quality, and response quality.",
     ))
     .run("You are a customer service agent. Answer clearly and empathetically.")
