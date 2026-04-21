@@ -5,18 +5,29 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-aevyra.mintlify.app-7B5CF8)](https://aevyra.mintlify.app/reflex/introduction)
 
-Agentic prompt optimization built for production workloads. Reflex takes your dataset and
-prompt, runs evals, diagnoses why scores are falling short, and rewrites the prompt — iterating
-until it converges. Runs can be interrupted and resumed at any point without losing work, and
-every token spent is tracked across sessions so you always know the cost. Every rewrite is
-accompanied by a reasoned explanation of what changed and why — prompt diffs, score
-attributions, and the full reasoning trace are persisted as a durable audit trail. Works for
-improving an existing prompt, migrating one to a new model, or closing the gap to your best
-model's score.
+Agentic prompt optimization built for production workloads. Reflex diagnoses why scores are
+falling short and rewrites the prompt — iterating until it converges. It works in two modes:
+
+- **Standard mode** — point it at an eval dataset and a starting prompt. Reflex runs evals,
+  diagnoses failures, and rewrites the prompt against that dataset.
+- **Pipeline mode** — point it at your agent pipeline. Reflex re-runs the full pipeline on
+  every candidate prompt so the judge sees tool calls, intermediate outputs, and the final
+  answer — not just the output string.
 
 ```bash
+# Standard mode
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -o best_prompt.md
+
+# Pipeline mode
+aevyra-reflex optimize prompt.md --pipeline-file pipeline.py --inputs-file inputs.json \
+  --judge openrouter/qwen/qwen3-30b-a3b --judge-criteria criteria.md
 ```
+
+Runs can be interrupted and resumed at any point without losing work, and every token spent is
+tracked across sessions so you always know the cost. Every rewrite is accompanied by a reasoned
+explanation of what changed and why — prompt diffs, score attributions, and the full reasoning
+trace are persisted as a durable audit trail. Works for improving an existing prompt, migrating
+one to a new model, or closing the gap to your best model's score.
 
 Works with any model — local Ollama or vLLM, OpenAI, Anthropic, Gemini, or
 any OpenAI-compatible endpoint.
@@ -527,9 +538,9 @@ result = (
 All strategies except `fewshot` work without labels. `auto` excludes fewshot
 automatically for label-free datasets.
 
-## Pipeline mode
+## Pipeline mode (agentic systems)
 
-Sometimes the prompt you want to optimize lives inside a multi-step agent pipeline — classify → retrieve → generate — rather than controlling a single LLM call. Traditional eval re-runs the same static traces each iteration; changes to the prompt don't affect what got classified or retrieved. Pipeline mode fixes this by re-running the full pipeline on every optimization iteration with the current candidate prompt, so each stage executes fresh.
+Use this when the prompt lives inside a multi-step agent pipeline — classify → retrieve → generate — rather than controlling a single LLM call. Standard mode scores a string against an ideal; it cannot see whether the agent called the right tools or grounded its answer in retrieved context. Pipeline mode fixes this by re-running the full pipeline on every optimization iteration with the current candidate prompt, so the judge evaluates the complete execution trace — tool calls, intermediate outputs, and the final answer — not just the string that comes out at the end.
 
 ```python
 from aevyra_reflex import PromptOptimizer, AgentTrace, TraceNode
