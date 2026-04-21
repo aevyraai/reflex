@@ -29,7 +29,8 @@ except ImportError:
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo("aevyra-reflex 0.1.0")
+        from aevyra_reflex import __version__
+        typer.echo(f"aevyra-reflex {__version__}")
         raise typer.Exit()
 
 app = typer.Typer(

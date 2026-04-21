@@ -17,6 +17,30 @@ estimates from memory. How it incorporates what the tools returned before
 composing its answer. The final output is downstream of all of those decisions,
 and most of them are invisible when you score a string against an ideal string.
 
+```mermaid
+flowchart TD
+    Q["User question"] --> A["Agent\n(LLM + system prompt)"]
+    A -->|"calls search_docs('pyflow batch API')"| T1["search_docs\n(retrieval)"]
+    A -->|"calls calculate('1024 / 32')"| T2["calculate\n(arithmetic)"]
+    A -->|"calls get_date()"| T3["get_date\n(real-time)"]
+    T1 -->|"retrieved docs"| A
+    T2 -->|"32.0"| A
+    T3 -->|"2026-04-20"| A
+    A --> R["Final answer"]
+
+    style Q fill:#6E3FF3,color:#fff,stroke:none
+    style R fill:#6E3FF3,color:#fff,stroke:none
+    style A fill:#A78BFA,color:#fff,stroke:none
+    style T1 fill:#f0f0f0,stroke:#ccc
+    style T2 fill:#f0f0f0,stroke:#ccc
+    style T3 fill:#f0f0f0,stroke:#ccc
+```
+
+Static eval sees only the **question** and the **final answer** — every decision
+in between is invisible. Whether `search_docs` was called, whether `calculate`
+was used or the model estimated, whether `get_date` was consulted at all: none
+of that is visible when you compare a string to an ideal.
+
 The failure mode is predictable. A model with broad domain knowledge can produce
 answers that look correct — right ballpark numbers, plausible API details —
 without calling a single tool. A static (input, output) dataset scores those
@@ -232,8 +256,8 @@ aevyra-reflex optimize \
   --pipeline-file examples/dev_assistant/pipeline.py \
   --inputs-file   examples/dev_assistant/questions.json \
   examples/dev_assistant/prompt.md \
-  --reasoning-model openrouter/qwen/qwen3-30b-a3b \
-  --judge openrouter/qwen/qwen3-30b-a3b \
+  --reasoning-model openrouter/qwen/qwen3-8b \
+  --judge           openrouter/qwen/qwen3-30b-a3b \
   --judge-criteria examples/dev_assistant/judge.md \
   --strategy auto \
   --max-workers 4 \

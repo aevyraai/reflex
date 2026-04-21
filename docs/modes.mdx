@@ -56,14 +56,20 @@ aevyra-reflex optimize \
 
 ### How it works
 
-You write a `pipeline_fn(prompt, input)` that runs your agent and returns an
-`AgentTrace`:
+You write a `pipeline_fn(prompt, input)` that wraps your existing agent and
+returns an `AgentTrace`. Your agent code doesn't change — you add one function
+around it:
 
 ```python
 from aevyra_reflex import AgentTrace, TraceNode
 
+# ── your existing agent — no changes needed ──────────────────────────────
+def run_agent(prompt: str, question: str) -> tuple[list, dict, str]:
+    # tool calls, retrieval, multi-step reasoning — all unchanged
+    ...
+
+# ── the only thing you add: a thin wrapper ───────────────────────────────
 def pipeline_fn(prompt: str, question: str) -> AgentTrace:
-    # Run your agent — tool calls, retrieval, multi-step reasoning
     tools_called, tool_results, final_answer = run_agent(prompt, question)
 
     return AgentTrace(nodes=[

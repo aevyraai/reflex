@@ -2,7 +2,12 @@
 
 ## Project overview
 
-aevyra-reflex is an agentic prompt optimizer. Given a JSONL eval dataset and a starting system prompt, it diagnoses why the model is underperforming, reasons about failure patterns, and iteratively rewrites the prompt until scores hit the target — all in a single command. It draws from four optimization axes (iterative, PDO, fewshot, structural) and adaptively picks the right one at each step.
+aevyra-reflex is an agentic prompt optimizer that works in two modes:
+
+- **Standard mode**: given a JSONL eval dataset and a starting system prompt, it diagnoses why the model is underperforming, reasons about failure patterns, and iteratively rewrites the prompt until scores hit the target — all in a single command.
+- **Pipeline mode**: given a `pipeline_fn(prompt, input) -> AgentTrace` and a list of raw inputs, it re-runs the full agent pipeline on every candidate prompt, scores the resulting execution traces (tool calls, intermediate outputs, final answer) via the judge, and optimizes the prompt against the whole system's behaviour — not just the final output string.
+
+Both modes draw from four optimization axes (iterative, PDO, fewshot, structural) and adaptively pick the right one at each step.
 
 It depends on `aevyra-verdict` for evaluation (running completions, scoring with metrics like ROUGE/BLEU/ExactMatch/LLMJudge). For reasoning, it uses an LLM (Claude by default, but configurable to any model including local ones via `--reasoning-model`).
 

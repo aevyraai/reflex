@@ -26,7 +26,7 @@ from aevyra_reflex.run_store import RunStore
 from aevyra_reflex.strategies import Strategy, register_strategy
 from aevyra_reflex.trace import AgentTrace, TraceNode
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AgentTrace",

@@ -5,18 +5,29 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-aevyra.mintlify.app-7B5CF8)](https://aevyra.mintlify.app/reflex/introduction)
 
-Agentic prompt optimization built for production workloads. Reflex takes your dataset and
-prompt, runs evals, diagnoses why scores are falling short, and rewrites the prompt — iterating
-until it converges. Runs can be interrupted and resumed at any point without losing work, and
-every token spent is tracked across sessions so you always know the cost. Every rewrite is
-accompanied by a reasoned explanation of what changed and why — prompt diffs, score
-attributions, and the full reasoning trace are persisted as a durable audit trail. Works for
-improving an existing prompt, migrating one to a new model, or closing the gap to your best
-model's score.
+Agentic prompt optimization built for production workloads. Reflex diagnoses why scores are
+falling short and rewrites the prompt — iterating until it converges. It works in two modes:
+
+- **Standard mode** — point it at an eval dataset and a starting prompt. Reflex runs evals,
+  diagnoses failures, and rewrites the prompt against that dataset.
+- **Pipeline mode** — point it at your agent pipeline. Reflex re-runs the full pipeline on
+  every candidate prompt so the judge sees tool calls, intermediate outputs, and the final
+  answer — not just the output string.
 
 ```bash
+# Standard mode
 aevyra-reflex optimize dataset.jsonl prompt.md -m local/llama3.1:8b -o best_prompt.md
+
+# Pipeline mode
+aevyra-reflex optimize prompt.md --pipeline-file pipeline.py --inputs-file inputs.json \
+  --judge openrouter/qwen/qwen3-30b-a3b --judge-criteria criteria.md
 ```
+
+Runs can be interrupted and resumed at any point without losing work, and every token spent is
+tracked across sessions so you always know the cost. Every rewrite is accompanied by a reasoned
+explanation of what changed and why — prompt diffs, score attributions, and the full reasoning
+trace are persisted as a durable audit trail. Works for improving an existing prompt, migrating
+one to a new model, or closing the gap to your best model's score.
 
 Works with any model — local Ollama or vLLM, OpenAI, Anthropic, Gemini, or
 any OpenAI-compatible endpoint.
@@ -527,19 +538,25 @@ result = (
 All strategies except `fewshot` work without labels. `auto` excludes fewshot
 automatically for label-free datasets.
 
-## Pipeline mode
+## Pipeline mode (agentic systems)
 
-Sometimes the prompt you want to optimize lives inside a multi-step agent pipeline — classify → retrieve → generate — rather than controlling a single LLM call. Traditional eval re-runs the same static traces each iteration; changes to the prompt don't affect what got classified or retrieved. Pipeline mode fixes this by re-running the full pipeline on every optimization iteration with the current candidate prompt, so each stage executes fresh.
+Use this when the prompt lives inside a multi-step agent pipeline — classify → retrieve → generate — rather than controlling a single LLM call. Standard mode scores a string against an ideal; it cannot see whether the agent called the right tools or grounded its answer in retrieved context. Pipeline mode fixes this by re-running the full pipeline on every optimization iteration with the current candidate prompt, so the judge evaluates the complete execution trace — tool calls, intermediate outputs, and the final answer — not just the string that comes out at the end.
 
-```python
-from aevyra_reflex import PromptOptimizer, AgentTrace, TraceNode
-from aevyra_verdict import LLMJudge
-from aevyra_verdict.providers import OpenRouterProvider
+**CLI** — you write one file, `pipeline.py`, and point the CLI at it:
 
-def run_pipeline(prompt: str, ticket: str) -> AgentTrace:
-    ticket_type = classify_ticket(ticket)            # your existing code
+```python title="pipeline.py"
+# ── your existing pipeline — no changes needed ──────────────────────────
+def classify_ticket(ticket: str) -> str: ...
+def retrieve_policy(ticket_type: str) -> str: ...
+def generate_response(ticket: str, policy: str, prompt: str) -> str: ...
+
+# ── the only thing you add: a thin wrapper ───────────────────────────────
+from aevyra_reflex import AgentTrace, TraceNode
+
+def pipeline_fn(prompt: str, ticket: str) -> AgentTrace:
+    ticket_type = classify_ticket(ticket)
     policy      = retrieve_policy(ticket_type)
-    response    = generate_response(ticket, policy, prompt)  # prompt controls this node
+    response    = generate_response(ticket, policy, prompt)
 
     return AgentTrace(
         nodes=[
@@ -549,30 +566,36 @@ def run_pipeline(prompt: str, ticket: str) -> AgentTrace:
         ],
         ideal=expected_response,   # optional — shown in failure reports
     )
+```
+
+```bash
+aevyra-reflex optimize prompt.md \
+  --pipeline-file pipeline.py \
+  --inputs-file   tickets.json \
+  --judge         openrouter/qwen/qwen3-30b-a3b \
+  --judge-criteria criteria.md
+```
+
+`tickets.json` is a JSON array of raw inputs. The CLI handles the optimizer loop, judge setup, and result reporting — `pipeline.py` only needs `pipeline_fn`.
+
+**Python API** — if you want programmatic control over the optimizer:
+
+```python
+from aevyra_reflex import PromptOptimizer, AgentTrace, TraceNode
+from aevyra_verdict import LLMJudge
+from aevyra_verdict.providers import OpenRouterProvider
 
 result = (
     PromptOptimizer()
-    .set_pipeline(run_pipeline)
-    .set_inputs(tickets)          # list of raw inputs
+    .set_pipeline(pipeline_fn)   # the same wrapper function from above
+    .set_inputs(tickets)         # list of raw inputs
     .add_metric(LLMJudge(
-        judge_provider=OpenRouterProvider(model="qwen/qwen3-8b"),
+        judge_provider=OpenRouterProvider(model="qwen/qwen3-30b-a3b"),
         criteria="Score the full pipeline trace: classification accuracy, policy retrieval quality, and response quality.",
     ))
     .run("You are a customer service agent. Answer clearly and empathetically.")
 )
 ```
-
-The CLI equivalent:
-
-```bash
-aevyra-reflex optimize prompt.md \
-  --pipeline-file pipeline.py \
-  --inputs-file tickets.json \
-  --judge openrouter/qwen/qwen3-8b \
-  --judge-criteria criteria.md
-```
-
-`pipeline.py` must define a `pipeline_fn(prompt, input) -> AgentTrace` function. `tickets.json` is a JSON array of inputs.
 
 The judge evaluates the full trace text — all nodes, their inputs and outputs — so it can assess the pipeline end-to-end. Mark the node being optimized with `optimize=True` to highlight it in the trace output. No `add_provider()` call is needed; the pipeline handles its own model calls.
 
