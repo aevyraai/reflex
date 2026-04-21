@@ -1,0 +1,125 @@
+---
+title: "Optimization modes"
+description: Standard mode for dataset-driven optimization and pipeline mode for agentic systems — when to use each and how they work.
+---
+
+Reflex works in two modes. The right choice depends on whether your task can
+be evaluated from a static dataset or requires running a live agent.
+
+## Standard mode
+
+Standard mode is the default. You provide a dataset of (input, ideal output)
+pairs and a starting prompt. Reflex runs evals, scores each prompt candidate
+against the dataset, and rewrites the prompt until scores converge.
+
+```bash
+aevyra-reflex optimize dataset.jsonl prompt.md \
+  -m openrouter/meta-llama/llama-3.1-8b-instruct \
+  -o best_prompt.md
+```
+
+**Use standard mode when:**
+- Your task has a well-defined correct output — summarization, extraction,
+  classification, translation, format compliance
+- You can build a dataset of (input, ideal) pairs that covers the failure cases
+  you care about
+- The prompt directly produces the output you want to score
+
+Standard mode works with any scoring metric — ROUGE, BLEU, exact match, or
+an LLM judge. See the [security incidents tutorial](/reflex/tutorial-security-incidents)
+for a complete standard-mode walkthrough.
+
+## Pipeline mode
+
+In pipeline mode, you provide a Python function that runs your full agent.
+Reflex re-runs that function on every candidate prompt and passes the complete
+execution trace — tool calls, tool results, and final answer — to the judge.
+
+```bash
+aevyra-reflex optimize \
+  --pipeline-file agent/pipeline.py \
+  --inputs-file   agent/questions.json \
+  prompt.md \
+  --judge openrouter/anthropic/claude-sonnet-4-5 \
+  --judge-criteria agent/judge.md \
+  -o best_prompt.md
+```
+
+**Use pipeline mode when:**
+- Your agent calls tools, retrieves context, or takes actions — and correctness
+  depends on whether those steps happened correctly, not just whether the final
+  string looks right
+- A static (input, ideal) dataset cannot tell whether the model used its tools
+  or answered from memory
+- You need the judge to see intermediate steps — which tools were called, what
+  they returned, where the answer diverged from the evidence
+
+### How it works
+
+You write a `pipeline_fn(prompt, input)` that runs your agent and returns an
+`AgentTrace`:
+
+```python
+from aevyra_reflex import AgentTrace, TraceNode
+
+def pipeline_fn(prompt: str, question: str) -> AgentTrace:
+    # Run your agent — tool calls, retrieval, multi-step reasoning
+    tools_called, tool_results, final_answer = run_agent(prompt, question)
+
+    return AgentTrace(nodes=[
+        TraceNode("tools_called", input=question,
+                  output=tools_called, optimize=False),
+        TraceNode("tool_results", input=tools_called,
+                  output=tool_results, optimize=False),
+        TraceNode("answer",
+                  input={"question": question, "tool_results": tool_results},
+                  output=final_answer, optimize=True),
+    ])
+```
+
+`optimize=True` marks the node whose prompt is being optimized. Nodes marked
+`optimize=False` are passed to the judge as context but not directly optimized.
+The judge receives the full trace and can enforce rules across all nodes —
+for example, penalizing a correct answer that bypassed available tools.
+
+### Judge rubric
+
+The judge rubric is the most important part of pipeline mode. It must
+explicitly penalize the failure modes that static eval cannot detect:
+
+```text
+Score the response from 1 to 5 based on the FULL PIPELINE TRACE.
+
+5 — Correct answer, fully grounded in tool results.
+    For math questions: calculate was called and the stated figure matches its output.
+    For doc questions:  answer is drawn from search_docs output, not general knowledge.
+
+2 — Technically correct but ignores available tool results.
+    The model answered from training knowledge even though the relevant tool
+    was available. Also applies when calculate was not called and the answer
+    contains an unsupported number claim.
+
+1 — Contradicts tool results, fabricates details, or gives "I don't know"
+    when tools clearly contain the answer.
+```
+
+Without an explicit "correct but bypassed tools → score 2" rule, a model that
+estimates correctly scores identically to one that called the tool — and the
+optimizer has no signal to fix the grounding problem.
+
+### Temperature
+
+Set `temperature=0.0` on every LLM call inside `pipeline_fn`. Reflex compares
+prompt variants by running the same inputs through your function multiple times.
+Sampling noise would make variant comparisons unreliable — a prompt may appear
+to improve or hurt purely by chance.
+
+### All strategies work in pipeline mode
+
+Standard mode strategies (iterative, structural, fewshot, PDO, auto) all work
+in pipeline mode. The optimizer calls `eval_fn(prompt, dataset)` instead of
+`_run_eval(prompt, dataset)` — your `pipeline_fn` is invoked inside `eval_fn`
+on every candidate. The strategy sees the same score signal regardless of mode.
+
+See the [pipeline mode tutorial](/reflex/tutorial-dev-assistant) for a complete
+walkthrough with real run logs.
