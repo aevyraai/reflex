@@ -62,6 +62,8 @@ dev = [
     "mlflow>=2.0",
     "wandb>=0.17",
     "openai>=2.31.0",
+    "bandit[toml]>=1.7",
+    "detect-secrets>=1.5",
 ]
 
 [project.scripts]

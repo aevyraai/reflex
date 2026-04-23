@@ -63,14 +63,14 @@ class TestResolveProvider:
             OpenRouterProvider(model="meta-llama/llama-3.1-8b-instruct")
 
     def test_together_resolves(self, monkeypatch):
-        monkeypatch.setenv("TOGETHER_API_KEY", "tog-test")
+        monkeypatch.setenv("TOGETHER_API_KEY", "tog-test")  # pragma: allowlist secret
         r = _resolve_provider("together", "meta-llama/Llama-3.1-8B-Instruct")
         assert r["provider_name"] == "openai"
         assert "together" in r["base_url"]
-        assert r["api_key"] == "tog-test"
+        assert r["api_key"] == "tog-test"  # pragma: allowlist secret
 
     def test_groq_resolves(self, monkeypatch):
-        monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+        monkeypatch.setenv("GROQ_API_KEY", "gsk-test")  # pragma: allowlist secret
         r = _resolve_provider("groq", "llama-3.1-8b-instant")
         assert r["provider_name"] == "openai"
         assert "groq" in r["base_url"]
@@ -88,8 +88,8 @@ class TestResolveProvider:
 
     def test_custom_api_key_passthrough(self):
         # Explicitly passed api_key propagates for any non-alias provider
-        r = _resolve_provider("openrouter", "test-model", api_key="custom-key")
-        assert r["api_key"] == "custom-key"
+        r = _resolve_provider("openrouter", "test-model", api_key="custom-key")  # pragma: allowlist secret
+        assert r["api_key"] == "custom-key"  # pragma: allowlist secret
 
     def test_alias_missing_key_raises_clear_error(self, monkeypatch):
         """Regression: missing key for aliased providers (together, groq, etc.)
@@ -225,7 +225,7 @@ class TestAddProvider:
         assert p["provider_name"] == "local"
 
     def test_add_provider_with_label(self, monkeypatch):
-        monkeypatch.setenv("TOGETHER_API_KEY", "tog-test")
+        monkeypatch.setenv("TOGETHER_API_KEY", "tog-test")  # pragma: allowlist secret
         opt = PromptOptimizer()
         opt.add_provider("together", "meta-llama/Llama-3.1-8B-Instruct", label="llama-together")
         p = opt._providers[0]
