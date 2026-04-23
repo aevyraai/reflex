@@ -193,7 +193,7 @@ class _OllamaBackend:
             headers={"Content-Type": "application/json"},
         )
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req) as resp:  # nosec B310 — URL is always HTTP, constructed from a user-configured base_url
                 data = json.loads(resp.read())
                 self.tokens_used = getattr(self, "tokens_used", 0) + (
                     data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
