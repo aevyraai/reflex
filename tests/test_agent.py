@@ -54,7 +54,7 @@ class TestResolveAgentBackend(unittest.TestCase):
 
     def test_explicit_openai(self):
         backend = _resolve_agent_backend(
-            "gpt-4o", provider="openai", api_key="sk-test"
+            "gpt-4o", provider="openai", api_key="sk-test"  # pragma: allowlist secret
         )
         self.assertIsInstance(backend, _OpenAIBackend)
         self.assertEqual(backend.model, "gpt-4o")
@@ -62,12 +62,12 @@ class TestResolveAgentBackend(unittest.TestCase):
     def test_explicit_openai_with_base_url(self):
         backend = _resolve_agent_backend(
             "my-model", provider="openai",
-            base_url="http://localhost:8000/v1", api_key="dummy"
+            base_url="http://localhost:8000/v1", api_key="dummy"  # pragma: allowlist secret
         )
         self.assertIsInstance(backend, _OpenAIBackend)
         self.assertEqual(backend._base_url, "http://localhost:8000/v1")
 
-    @patch.dict("os.environ", {"OPENROUTER_API_KEY": "or-key-123"})
+    @patch.dict("os.environ", {"OPENROUTER_API_KEY": "or-key-123"})  # pragma: allowlist secret
     def test_explicit_alias_openrouter(self):
         backend = _resolve_agent_backend(
             "meta-llama/llama-3.1-70b-instruct", provider="openrouter"
@@ -75,7 +75,7 @@ class TestResolveAgentBackend(unittest.TestCase):
         self.assertIsInstance(backend, _OpenAIBackend)
         self.assertIn("openrouter.ai", backend._base_url)
 
-    @patch.dict("os.environ", {"TOGETHER_API_KEY": "tog-key"})
+    @patch.dict("os.environ", {"TOGETHER_API_KEY": "tog-key"})  # pragma: allowlist secret
     def test_explicit_alias_together(self):
         backend = _resolve_agent_backend(
             "meta-llama/Llama-3.1-8B-Instruct", provider="together"
@@ -165,12 +165,12 @@ class TestLLMInit(unittest.TestCase):
         mock_resolve.return_value = MagicMock()
         LLM(
             model="gpt-4o", max_tokens=8192,
-            provider="openai", api_key="sk-test",
+            provider="openai", api_key="sk-test",  # pragma: allowlist secret
             base_url="http://my-endpoint/v1",
         )
         mock_resolve.assert_called_once_with(
             "gpt-4o", 8192,
-            provider="openai", api_key="sk-test",
+            provider="openai", api_key="sk-test",  # pragma: allowlist secret
             base_url="http://my-endpoint/v1",
         )
 
@@ -244,7 +244,7 @@ class TestOpenAIBackend(unittest.TestCase):
     """Test _OpenAIBackend."""
 
     def test_generate_calls_chat_completions(self):
-        backend = _OpenAIBackend("gpt-4o", 4096, api_key="sk-test")
+        backend = _OpenAIBackend("gpt-4o", 4096, api_key="sk-test")  # pragma: allowlist secret
         mock_client = MagicMock()
         mock_choice = MagicMock()
         mock_choice.message.content = "result"
